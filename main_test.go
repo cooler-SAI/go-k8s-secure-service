@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -64,8 +65,65 @@ func TestLivezHandler(t *testing.T) {
 	}
 }
 
+func TestReadyzHandler(t *testing.T) {
+	tests := []struct {
+		name           string
+		readyVal       *bool
+		expectedStatus int
+		expectedBody   string
+	}{
+		{
+			name:           "ready when atomic flag is true",
+			readyVal:       boolPtr(true),
+			expectedStatus: http.StatusOK,
+			expectedBody:   "OK\n",
+		},
+		{
+			name:           "not ready when atomic flag is false",
+			readyVal:       boolPtr(false),
+			expectedStatus: http.StatusServiceUnavailable,
+			expectedBody:   "Not Ready\n",
+		},
+		{
+			name:           "ready when atomic pointer is nil",
+			readyVal:       nil,
+			expectedStatus: http.StatusOK,
+			expectedBody:   "OK\n",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var isReady *atomic.Bool
+			if tt.readyVal != nil {
+				isReady = &atomic.Bool{}
+				isReady.Store(*tt.readyVal)
+			}
+
+			handler := readyzHandler(isReady)
+			req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+			rr := httptest.NewRecorder()
+
+			handler(rr, req)
+
+			if status := rr.Code; status != tt.expectedStatus {
+				t.Errorf("readyzHandler returned status %v, want %v", status, tt.expectedStatus)
+			}
+			if body := rr.Body.String(); body != tt.expectedBody {
+				t.Errorf("readyzHandler returned body %q, want %q", body, tt.expectedBody)
+			}
+		})
+	}
+}
+
+func boolPtr(b bool) *bool {
+	return &b
+}
+
 func TestRouter(t *testing.T) {
-	router := setupRouter()
+	var isReady atomic.Bool
+	isReady.Store(true)
+	router := setupRouter(&isReady)
 
 	tests := []struct {
 		name           string
@@ -82,6 +140,12 @@ func TestRouter(t *testing.T) {
 		{
 			name:           "route /livez",
 			path:           "/livez",
+			expectedStatus: http.StatusOK,
+			expectedBody:   "OK\n",
+		},
+		{
+			name:           "route /readyz when ready",
+			path:           "/readyz",
 			expectedStatus: http.StatusOK,
 			expectedBody:   "OK\n",
 		},
@@ -108,10 +172,21 @@ func TestRouter(t *testing.T) {
 			}
 		})
 	}
+
+	// Also verify /readyz switches to 503 when not ready
+	isReady.Store(false)
+	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	if rr.Code != http.StatusServiceUnavailable {
+		t.Errorf("/readyz when not ready returned %d, want %d", rr.Code, http.StatusServiceUnavailable)
+	}
 }
 
 func TestNewServer(t *testing.T) {
-	router := setupRouter()
+	var isReady atomic.Bool
+	isReady.Store(true)
+	router := setupRouter(&isReady)
 	srv := newServer(":8080", router)
 
 	if srv.Addr != ":8080" {

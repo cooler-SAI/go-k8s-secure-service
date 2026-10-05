@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync/atomic"
 	"syscall"
 	"time"
 )
@@ -34,10 +35,26 @@ func livezHandler(w http.ResponseWriter, _ *http.Request) {
 	}
 }
 
-func setupRouter() http.Handler {
+func readyzHandler(isReady *atomic.Bool) http.HandlerFunc {
+	return func(w http.ResponseWriter, _ *http.Request) {
+		if isReady != nil && !isReady.Load() {
+			http.Error(w, "Not Ready", http.StatusServiceUnavailable)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, err := fmt.Fprintln(w, "OK")
+		if err != nil {
+			log.Printf("Error writing response: %v\n", err)
+			return
+		}
+	}
+}
+
+func setupRouter(isReady *atomic.Bool) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", mainPage)
 	mux.HandleFunc("/livez", livezHandler)
+	mux.HandleFunc("/readyz", readyzHandler(isReady))
 	return mux
 }
 
@@ -53,7 +70,10 @@ func newServer(addr string, handler http.Handler) *http.Server {
 }
 
 func run(ctx context.Context, addr string) error {
-	srv := newServer(addr, setupRouter())
+	var isReady atomic.Bool
+	isReady.Store(true)
+
+	srv := newServer(addr, setupRouter(&isReady))
 
 	serverErr := make(chan error, 1)
 	go func() {
@@ -68,6 +88,7 @@ func run(ctx context.Context, addr string) error {
 	case err := <-serverErr:
 		return fmt.Errorf("server error: %w", err)
 	case <-ctx.Done():
+		isReady.Store(false)
 		log.Println("Shutdown signal received (SIGTERM/SIGINT), initiating graceful shutdown...")
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()

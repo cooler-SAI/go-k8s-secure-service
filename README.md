@@ -6,12 +6,13 @@ A lightweight, secure Go HTTP service designed for containerized deployment and 
 
 ## Overview
 
-`go-k8s-secure-service` serves as a foundation for building resilient, cloud-native microservices in Go. It provides standard HTTP endpoints, built-in Kubernetes health check probes, graceful shutdown handling via `SIGTERM`, and an enterprise-grade security baseline for containerized environments.
+`go-k8s-secure-service` serves as a foundation for building resilient, cloud-native microservices in Go. It provides standard HTTP endpoints, built-in Kubernetes health check probes (`/livez` and `/readyz`), graceful shutdown handling via `SIGTERM`, and an enterprise-grade security baseline for containerized environments.
 
 ## Features
 
 - **Root Endpoint (`/`)**: Returns a basic greeting (`Hello, World!`) with HTTP status 200 OK. Unknown paths return 404 Not Found.
 - **Kubernetes Liveness Probe (`/livez`)**: Provides a dedicated health probe endpoint for orchestrators (e.g., Kubernetes `livenessProbe`) to monitor service vitality.
+- **Kubernetes Readiness Probe (`/readyz`)**: Signals service readiness to receive incoming traffic (Kubernetes `readinessProbe`). Automatically switches to `503 Service Unavailable` on shutdown signals to immediately stop traffic ingress before connection draining completes.
 - **Graceful Shutdown (`SIGTERM` / `SIGINT`)**: Listens for termination signals from Kubernetes (`SIGTERM`) or process interruptions (`SIGINT`), initiating a non-blocking graceful shutdown (`srv.Shutdown()`) with a 10-second drain window for in-flight requests.
 - **Hardened HTTP Timeouts**: Explicitly configures `ReadHeaderTimeout`, `ReadTimeout`, `WriteTimeout`, and `IdleTimeout` to mitigate Slowloris and connection starvation attacks.
 - **Comprehensive Unit Tests**: High-coverage test suite verifying handlers, routing, server timeout settings, and shutdown lifecycle.
@@ -79,22 +80,27 @@ go test -v -cover ./...
   # Output: OK
   ```
 
+- **Readiness probe endpoint**:
+  ```bash
+  curl http://localhost:8080/readyz
+  # Output: OK
+  ```
+
 ---
 
 ## Kubernetes Integration
 
-### Pod Lifecycle and SIGTERM Handling
+### Pod Lifecycle, Probes, and SIGTERM Handling
 
-When Kubernetes scales down a deployment, performs a rolling update, or terminates a pod, it sends a `SIGTERM` signal to the container's PID 1 process.
-
-`go-k8s-secure-service` intercepts `SIGTERM` (and `SIGINT`) using `signal.NotifyContext`:
-1. The server stops accepting new incoming connections.
-2. In-flight requests are allowed up to 10 seconds to complete cleanly via `http.Server.Shutdown(shutdownCtx)`.
-3. The process exits with code 0 once all active connections are drained, preventing dropped requests during Kubernetes rolling updates.
+When Kubernetes scales down a deployment, performs a rolling update, or terminates a pod:
+1. Kubernetes sends a `SIGTERM` signal to the container's PID 1 process.
+2. `go-k8s-secure-service` catches `SIGTERM` and immediately flips `/readyz` to `503 Service Unavailable` (`Not Ready`). This prompts Kubernetes to promptly remove the pod from Service endpoints and ingress routing.
+3. Simultaneously, `http.Server.Shutdown(shutdownCtx)` is triggered, preventing new TCP connections while granting in-flight requests up to 10 seconds to finish processing cleanly.
+4. The process exits cleanly with code 0 once all active connections drain.
 
 ### Deployment Manifest Example
 
-You can deploy the service and configure the `/livez` probe and container port as shown below:
+You can deploy the service and configure both the `/livez` and `/readyz` probes in your Deployment manifest:
 
 ```yaml
 apiVersion: apps/v1
@@ -125,6 +131,12 @@ spec:
               port: 8080
             initialDelaySeconds: 3
             periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8080
+            initialDelaySeconds: 2
+            periodSeconds: 5
 ```
 
 ---
@@ -135,7 +147,7 @@ spec:
 - [x] **Graceful Shutdown**: Implement clean signal handling (`SIGINT`, `SIGTERM`) using `context` to prevent dropped in-flight requests during rolling updates.
 - [x] **HTTP Timeouts**: Configure explicit `ReadTimeout`, `WriteTimeout`, and `IdleTimeout` on `http.Server` to mitigate Slowloris / denial-of-service attacks.
 - [x] **Automated Testing & CI/CD**: Unit testing with `net/http/httptest`.
-- [ ] **Readiness Probe**: Add `/readyz` for traffic readiness verification.
+- [x] **Readiness Probe**: Add `/readyz` for traffic readiness verification.
 - [ ] **Structured Logging**: Replace standard logging with structured JSON logging (`slog`).
 - [ ] **Containerization & Hardening**:
   - Multi-stage Dockerfile based on `distroless` or `scratch`.
