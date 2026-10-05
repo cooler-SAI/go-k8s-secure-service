@@ -22,6 +22,7 @@ A lightweight, secure Go HTTP service designed for containerized deployment and 
 go-k8s-secure-service/
 ├── .idea/              # IDE configuration
 ├── .gitignore          # Git ignore rules
+├── go.mod              # Go module definition and dependencies
 ├── main.go             # Application entry point and HTTP handlers
 └── README.md           # Project documentation
 ```
@@ -109,7 +110,7 @@ spec:
 
 ## Roadmap & Security Hardening
 
-- [ ] **Go Modules**: Initialize `go.mod` for dependency management and version reproducibility.
+- [x] **Go Modules**: Initialize `go.mod` for dependency management and version reproducibility.
 - [ ] **Readiness Probe**: Add `/readyz` for traffic readiness verification.
 - [ ] **Graceful Shutdown**: Implement clean signal handling (`SIGINT`, `SIGTERM`) using `context` to prevent dropped in-flight requests during rolling updates.
 - [ ] **HTTP Timeouts**: Configure explicit `ReadTimeout`, `WriteTimeout`, and `IdleTimeout` on `http.Server` to mitigate Slowloris / denial-of-service attacks.
