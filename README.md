@@ -58,6 +58,24 @@ go-k8s-secure-service/
    2026/10/06 01:24:31 Server starting on :8080...
    ```
 
+### Configuration and Environment Variables
+
+The service currently uses fixed settings defined in `main.go`; it does not read
+configuration from environment variables or command-line flags.
+
+| Setting | Current value | Description |
+| --- | --- | --- |
+| Listen address | `:8080` | Binds the HTTP server to port 8080 on all network interfaces. |
+| Read-header timeout | 5 seconds | Limits the time allowed to read request headers. |
+| Read timeout | 10 seconds | Limits the time allowed to read the full request. |
+| Write timeout | 10 seconds | Limits the time allowed to write a response. |
+| Idle timeout | 60 seconds | Limits how long an idle keep-alive connection remains open. |
+| Shutdown drain window | 10 seconds | Maximum time allowed for in-flight requests to finish after a termination signal. |
+
+To change these settings, update the corresponding server configuration in
+`main.go`. The Kubernetes container port and probe ports should match the
+configured listen port.
+
 ### Running Tests
 
 Execute the unit test suite with coverage report:
