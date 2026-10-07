@@ -1,0 +1,5 @@
+-Dide.managed.by.toolbox=C:\Users\coole\AppData\Local\JetBrains\Toolbox\bin\jetbrains-toolbox.exe
+-Dtoolbox.notification.token=e4e7e743-b7ac-42d1-97d8-cf59311a1da5
+-Dtoolbox.notification.portFile=C:\Users\coole\AppData\Local\JetBrains\Toolbox\cache\ports\e97af88b-003f-4e39-a849-9bf7dcacc0ec.port
+-Xmx2048m
+-Djava.net.useSystemProxies=false
