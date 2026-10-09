@@ -1,0 +1,17 @@
+# Git & IDE
+.git
+.idea
+.vscode
+
+# Binary outputs & tests
+*.exe
+*.test
+*.out
+
+# Project metadata & configs
+.github
+Dockerfile*
+.dockerignore
+README.md
+trivy.yaml
+goland64.exe.vmoptions
