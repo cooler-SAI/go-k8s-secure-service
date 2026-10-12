@@ -145,57 +145,19 @@ When Kubernetes scales down a deployment, performs a rolling update, or terminat
 3. Simultaneously, `http.Server.Shutdown(shutdownCtx)` is triggered, preventing new TCP connections while granting in-flight requests up to 10 seconds to finish processing cleanly.
 4. The process exits cleanly with code 0 once all active connections drain.
 
-### Deployment Manifest Example
+### Deployment Manifest
 
-You can deploy the service and configure both the `/livez` and `/readyz` probes in your Deployment manifest:
+The hardened Deployment manifest is maintained at
+[`k8s/deployment.yaml`](k8s/deployment.yaml). It runs two replicas as UID/GID
+`65532`, disables service-account token mounting, uses a read-only root
+filesystem, drops Linux capabilities, sets resource requests and limits, and
+configures the `/livez` and `/readyz` probes.
 
-```yaml
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: go-k8s-secure-service
-  labels:
-    app: go-k8s-secure-service
-spec:
-  replicas: 2
-  selector:
-    matchLabels:
-      app: go-k8s-secure-service
-  template:
-    metadata:
-      labels:
-        app: go-k8s-secure-service
-    spec:
-      terminationGracePeriodSeconds: 30
-      securityContext:
-        seccompProfile:
-          type: RuntimeDefault
-      containers:
-        - name: go-k8s-secure-service
-          image: go-k8s-secure-service:latest
-          securityContext:
-            runAsNonRoot: true
-            runAsUser: 65532
-            runAsGroup: 65532
-            allowPrivilegeEscalation: false
-            readOnlyRootFilesystem: true
-            capabilities:
-              drop:
-                - ALL
-          ports:
-            - containerPort: 8080
-          livenessProbe:
-            httpGet:
-              path: /livez
-              port: 8080
-            initialDelaySeconds: 3
-            periodSeconds: 10
-          readinessProbe:
-            httpGet:
-              path: /readyz
-              port: 8080
-            initialDelaySeconds: 2
-            periodSeconds: 5
+Make the `go-k8s-secure-service:v1.0.0` image available to your cluster nodes
+or update the manifest to use an image in your container registry, then apply it:
+
+```bash
+kubectl apply -f k8s/deployment.yaml
 ```
 
 ---
