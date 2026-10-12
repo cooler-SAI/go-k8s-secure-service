@@ -6,28 +6,19 @@
 # =========================================================
 FROM golang:1.24-alpine AS builder
 
-# Set working directory for build
-WORKDIR /app
+WORKDIR /src
 
-# Copy dependency definition files first for efficient Docker layer caching
-# The wildcard pattern go.sum* prevents build failures if go.sum does not exist yet
-COPY go.mod go.sum* ./
+ENV GOTOOLCHAIN=local
 
-# Download dependencies (this layer is cached until go.mod/go.sum changes)
-RUN go mod download
-
-# Copy application source code
 COPY . .
 
-# Compile binary:
-# - CGO_ENABLED=0: statically linked binary without C runtime dependencies (required for distroless static)
-# - GOOS=linux: target operating system Linux
-# - -trimpath: removes host filesystem absolute paths from stack traces and binary metadata
-# - -ldflags="-s -w": strips symbol table (-s) and DWARF debugging information (-w) to minimize size
-RUN CGO_ENABLED=0 GOOS=linux go build \
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 GOOS=linux GOFLAGS=-mod=readonly go build \
+    -buildvcs=false \
     -trimpath \
     -ldflags="-s -w" \
-    -o /app/server .
+    -o /out/server .
 
 # =========================================================
 # Final runtime stage
@@ -36,18 +27,10 @@ RUN CGO_ENABLED=0 GOOS=linux go build \
 # =========================================================
 FROM gcr.io/distroless/static-debian12:nonroot
 
-# Runtime working directory
-WORKDIR /app
+COPY --from=builder --chown=65532:65532 /out/server /server
 
-# Copy compiled binary from builder stage
-COPY --from=builder /app/server /app/server
+USER 65532:65532
 
-# Explicitly set non-root user (UID:GID 65532:65532) to satisfy security scanners (Trivy, Hadolint)
-USER nonroot:nonroot
-
-# Expose service HTTP port
 EXPOSE 8080
 
-# Run binary directly in JSON exec form without a shell
-# Ensures process runs as PID 1 and correctly handles SIGTERM/SIGINT signals for graceful shutdown
-ENTRYPOINT ["/app/server"]
+ENTRYPOINT ["/server"]
