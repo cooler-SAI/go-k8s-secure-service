@@ -15,6 +15,7 @@ A lightweight, secure Go HTTP service designed for containerized deployment and 
 - **Kubernetes Readiness Probe (`/readyz`)**: Signals service readiness to receive incoming traffic (Kubernetes `readinessProbe`). Automatically switches to `503 Service Unavailable` on shutdown signals to immediately stop traffic ingress before connection draining completes.
 - **Graceful Shutdown (`SIGTERM` / `SIGINT`)**: Listens for termination signals from Kubernetes (`SIGTERM`) or process interruptions (`SIGINT`), initiating a non-blocking graceful shutdown (`srv.Shutdown()`) with a 10-second drain window for in-flight requests.
 - **Hardened HTTP Timeouts**: Explicitly configures `ReadHeaderTimeout`, `ReadTimeout`, `WriteTimeout`, and `IdleTimeout` to mitigate Slowloris and connection starvation attacks.
+- **Hardened Container Image**: Uses a multi-stage build and a minimal distroless runtime, runs as a non-root user, and builds a static binary.
 - **Comprehensive Unit Tests**: High-coverage test suite verifying handlers, routing, server timeout settings, and shutdown lifecycle.
 
 ---
@@ -25,6 +26,8 @@ A lightweight, secure Go HTTP service designed for containerized deployment and 
 go-k8s-secure-service/
 ├── .idea/              # IDE configuration
 ├── .gitignore          # Git ignore rules
+├── .dockerignore       # Excludes development files from the build context
+├── Dockerfile          # Multi-stage hardened container build
 ├── go.mod              # Go module definition and dependencies
 ├── main.go             # Application entry point, server configuration, and HTTP handlers
 ├── main_test.go        # Unit and integration test suite
@@ -37,7 +40,8 @@ go-k8s-secure-service/
 
 ### Prerequisites
 
-- [Go](https://golang.org/dl/) (1.20+ recommended)
+- [Go](https://golang.org/dl/) 1.24 or later
+- Docker with BuildKit support (enabled by default in current Docker releases)
 - `curl` or any API client (optional, for testing endpoints)
 
 ### Running Locally
@@ -83,6 +87,31 @@ Execute the unit test suite with coverage report:
 ```bash
 go test -v -cover ./...
 ```
+
+### Building and Running the Container
+
+Build the image from the repository root:
+
+```bash
+docker build -t go-k8s-secure-service:local .
+```
+
+Run it with a read-only root filesystem and no Linux capabilities:
+
+```bash
+docker run --rm \
+  --read-only \
+  --cap-drop=ALL \
+  --security-opt=no-new-privileges \
+  -p 8080:8080 \
+  go-k8s-secure-service:local
+```
+
+The runtime image contains only the service binary and required runtime data;
+it has no shell or package manager. The process runs as UID/GID `65532`, and
+the image uses exec-form `ENTRYPOINT` so termination signals reach the Go
+process directly. BuildKit cache mounts speed up repeated Go builds without
+adding build caches to the final image.
 
 ### Verifying Endpoints
 
@@ -138,9 +167,21 @@ spec:
         app: go-k8s-secure-service
     spec:
       terminationGracePeriodSeconds: 30
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: go-k8s-secure-service
           image: go-k8s-secure-service:latest
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+            runAsGroup: 65532
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
           ports:
             - containerPort: 8080
           livenessProbe:
@@ -167,10 +208,8 @@ spec:
 - [x] **Automated Testing & CI/CD**: Unit testing with `net/http/httptest`.
 - [x] **Readiness Probe**: Add `/readyz` for traffic readiness verification.
 - [ ] **Structured Logging**: Replace standard logging with structured JSON logging (`slog`).
-- [ ] **Containerization & Hardening**:
-  - Multi-stage Dockerfile based on `distroless` or `scratch`.
-  - Non-root user execution (`runAsNonRoot: true`, `readOnlyRootFilesystem: true`).
-  - Kubernetes `SecurityContext` and `NetworkPolicy` profiles.
+- [x] **Containerization & Hardening**: Multi-stage distroless image, static binary, non-root runtime user, and hardened Kubernetes `SecurityContext` example.
+- [ ] **Network Policy**: Add a least-privilege Kubernetes `NetworkPolicy` example.
 
 ---
 
