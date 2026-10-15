@@ -40,7 +40,7 @@ go-k8s-secure-service/
 
 ### Prerequisites
 
-- [Go](https://golang.org/dl/) 1.24 or later
+- [Go](https://go.dev/dl/) 1.27.2 or later
 - Docker with BuildKit support (enabled by default in current Docker releases)
 - `curl` or any API client (optional, for testing endpoints)
 

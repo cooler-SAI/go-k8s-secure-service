@@ -2,9 +2,10 @@
 
 # =========================================================
 # Builder stage
-# Use lightweight Alpine-based Go 1.24 image
+# Lightweight Alpine-based Go 1.27 image, pinned by digest for reproducible builds.
+# Keep the tag in sync with the go directive in go.mod.
 # =========================================================
-FROM golang:1.24-alpine AS builder
+FROM golang:1.27.2-alpine@sha256:f92b6ef800e499660581efdabdf25d9d817a9d124eaf900924f0504e7e27e12d AS builder
 
 WORKDIR /src
 
@@ -25,7 +26,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 # Distroless static base: only the binary, CA certificates, and tzdata.
 # Contains no shell, package managers, or standard system utilities, minimizing attack surface.
 # =========================================================
-FROM gcr.io/distroless/static-debian12:nonroot
+FROM gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab
 
 COPY --from=builder --chown=65532:65532 /out/server /server
 
