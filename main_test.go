@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -206,27 +207,101 @@ func TestNewServer(t *testing.T) {
 	}
 }
 
-func TestRunGracefulShutdown(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-
+func newTestListener(t *testing.T) net.Listener {
+	t.Helper()
 	// Use an ephemeral port on localhost to avoid port collision
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to listen: %v", err)
+	}
+	return ln
+}
+
+func getStatus(client *http.Client, url string) (int, error) {
+	resp, err := client.Get(url)
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+	return resp.StatusCode, nil
+}
+
+func TestRunGracefulShutdown(t *testing.T) {
+	const drainDelay = 300 * time.Millisecond
+
+	ln := newTestListener(t)
+	readyzURL := "http://" + ln.Addr().String() + "/readyz"
+	client := &http.Client{
+		Timeout:   time.Second,
+		Transport: &http.Transport{DisableKeepAlives: true},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	done := make(chan error, 1)
 	go func() {
-		done <- run(ctx, "127.0.0.1:0")
+		done <- run(ctx, ln, drainDelay)
 	}()
 
-	// Allow server goroutine to start
-	time.Sleep(50 * time.Millisecond)
+	if status, err := getStatus(client, readyzURL); err != nil || status != http.StatusOK {
+		t.Fatalf("/readyz before shutdown: status %d, err %v; want 200", status, err)
+	}
 
 	// Trigger shutdown via context cancellation (simulates SIGTERM/SIGINT)
+	shutdownStart := time.Now()
 	cancel()
+
+	// During the drain window the server must keep accepting connections
+	// while reporting not-ready, so in-flight routing does not hit a closed port.
+	deadline := time.Now().Add(drainDelay / 2)
+	for {
+		status, err := getStatus(client, readyzURL)
+		if err != nil {
+			t.Fatalf("/readyz during drain window: connection failed: %v", err)
+		}
+		if status == http.StatusServiceUnavailable {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("/readyz during drain window: status %d, want 503", status)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 
 	select {
 	case err := <-done:
 		if err != nil {
 			t.Fatalf("run failed on graceful shutdown: %v", err)
 		}
+		if elapsed := time.Since(shutdownStart); elapsed < drainDelay {
+			t.Errorf("run returned after %v, before drain delay %v elapsed", elapsed, drainDelay)
+		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("run timed out during graceful shutdown")
+	}
+
+	if _, err := getStatus(client, readyzURL); err == nil {
+		t.Error("server still accepting connections after shutdown")
+	}
+}
+
+func TestRunServeError(t *testing.T) {
+	ln := newTestListener(t)
+	// A closed listener makes Serve fail immediately.
+	_ = ln.Close()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- run(context.Background(), ln, 0)
+	}()
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("run returned nil, want server error")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("run did not return after serve error")
 	}
 }

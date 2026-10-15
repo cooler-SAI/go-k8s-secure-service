@@ -13,7 +13,7 @@ A lightweight, secure Go HTTP service designed for containerized deployment and 
 - **Root Endpoint (`/`)**: Returns a basic greeting (`Hello, World!`) with HTTP status 200 OK. Unknown paths return 404 Not Found.
 - **Kubernetes Liveness Probe (`/livez`)**: Provides a dedicated health probe endpoint for orchestrators (e.g., Kubernetes `livenessProbe`) to monitor service vitality.
 - **Kubernetes Readiness Probe (`/readyz`)**: Signals service readiness to receive incoming traffic (Kubernetes `readinessProbe`). Automatically switches to `503 Service Unavailable` on shutdown signals to immediately stop traffic ingress before connection draining completes.
-- **Graceful Shutdown (`SIGTERM` / `SIGINT`)**: Listens for termination signals from Kubernetes (`SIGTERM`) or process interruptions (`SIGINT`), initiating a non-blocking graceful shutdown (`srv.Shutdown()`) with a 10-second drain window for in-flight requests.
+- **Graceful Shutdown (`SIGTERM` / `SIGINT`)**: Listens for termination signals from Kubernetes (`SIGTERM`) or process interruptions (`SIGINT`), reporting not-ready and continuing to serve for a 5-second drain delay while endpoint removal propagates, then running a graceful shutdown (`srv.Shutdown()`) with a 10-second window for in-flight requests.
 - **Hardened HTTP Timeouts**: Explicitly configures `ReadHeaderTimeout`, `ReadTimeout`, `WriteTimeout`, and `IdleTimeout` to mitigate Slowloris and connection starvation attacks.
 - **Hardened Container Image**: Uses a multi-stage build and a minimal distroless runtime, runs as a non-root user, and builds a static binary.
 - **Comprehensive Unit Tests**: High-coverage test suite verifying handlers, routing, server timeout settings, and shutdown lifecycle.
@@ -74,7 +74,8 @@ configuration from environment variables or command-line flags.
 | Read timeout | 10 seconds | Limits the time allowed to read the full request. |
 | Write timeout | 10 seconds | Limits the time allowed to write a response. |
 | Idle timeout | 60 seconds | Limits how long an idle keep-alive connection remains open. |
-| Shutdown drain window | 10 seconds | Maximum time allowed for in-flight requests to finish after a termination signal. |
+| Shutdown drain delay | 5 seconds | Time the server keeps serving (while `/readyz` reports 503) after a termination signal, before closing the listener. |
+| Shutdown timeout | 10 seconds | Maximum time allowed for in-flight requests to finish once the listener is closed. |
 
 To change these settings, update the corresponding server configuration in
 `main.go`. The Kubernetes container port and probe ports should match the
@@ -141,9 +142,14 @@ adding build caches to the final image.
 
 When Kubernetes scales down a deployment, performs a rolling update, or terminates a pod:
 1. Kubernetes sends a `SIGTERM` signal to the container's PID 1 process.
-2. `go-k8s-secure-service` catches `SIGTERM` and immediately flips `/readyz` to `503 Service Unavailable` (`Not Ready`). This prompts Kubernetes to promptly remove the pod from Service endpoints and ingress routing.
-3. Simultaneously, `http.Server.Shutdown(shutdownCtx)` is triggered, preventing new TCP connections while granting in-flight requests up to 10 seconds to finish processing cleanly.
-4. The process exits cleanly with code 0 once all active connections drain.
+2. In parallel, Kubernetes starts removing the pod from Service endpoints. That removal reaches kube-proxy, load balancers, and ingress controllers asynchronously, so new requests can still arrive for a few seconds.
+3. `go-k8s-secure-service` catches `SIGTERM`, flips `/readyz` to `503 Service Unavailable` (`Not Ready`), and **keeps serving for a 5-second drain delay** so requests still being routed to the pod are handled instead of refused.
+4. After the delay, `http.Server.Shutdown(shutdownCtx)` closes the listener and grants in-flight requests up to 10 seconds to finish processing cleanly.
+5. The process exits cleanly with code 0 once all active connections drain.
+
+The drain delay (5s) plus the shutdown timeout (10s) must stay below the pod's
+`terminationGracePeriodSeconds` (30s in `k8s/deployment.yaml`); otherwise the
+kubelet sends `SIGKILL` before draining finishes.
 
 ### Deployment Manifest
 
@@ -167,7 +173,8 @@ kubectl apply -f k8s/deployment.yaml
 - [x] **Go Modules**: Initialize `go.mod` for dependency management and version reproducibility.
 - [x] **Graceful Shutdown**: Implement clean signal handling (`SIGINT`, `SIGTERM`) using `context` to prevent dropped in-flight requests during rolling updates.
 - [x] **HTTP Timeouts**: Configure explicit `ReadTimeout`, `WriteTimeout`, and `IdleTimeout` on `http.Server` to mitigate Slowloris / denial-of-service attacks.
-- [x] **Automated Testing & CI/CD**: Unit testing with `net/http/httptest`.
+- [x] **Automated Testing & CI/CD**: Unit testing with `net/http/httptest`; GitHub Actions runs `gofmt`, `go vet`, race-enabled tests, and a build on every push and PR (`.github/workflows/ci.yml`).
+- [x] **Security Scanning**: Trivy scans dependencies, Dockerfile/Kubernetes misconfigurations, and secrets in the repo, plus the built container image, failing on HIGH/CRITICAL findings and uploading SARIF to GitHub Code Scanning. All actions are pinned to commit SHAs (`.github/workflows/trivy.yml`).
 - [x] **Readiness Probe**: Add `/readyz` for traffic readiness verification.
 - [ ] **Structured Logging**: Replace standard logging with structured JSON logging (`slog`).
 - [x] **Containerization & Hardening**: Multi-stage distroless image, static binary, non-root runtime user, and hardened Kubernetes `SecurityContext` example.
