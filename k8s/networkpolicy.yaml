@@ -1,0 +1,33 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: go-k8s-secure-service
+  labels:
+    app: go-k8s-secure-service
+spec:
+  podSelector:
+    matchLabels:
+      app: go-k8s-secure-service
+  # Listing both types with no matching egress rules makes this
+  # default-deny in both directions for the selected pods.
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Only the HTTP port is reachable, and only from:
+    #   - pods in the same namespace (e.g. other services calling it), and
+    #   - the ingress controller's namespace.
+    # Adjust the namespace name to match your ingress controller or Gateway.
+    # Kubelet health probes originate from the node and are not blocked by
+    # NetworkPolicy on standard CNIs.
+    - from:
+        - podSelector: {}
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+      ports:
+        - protocol: TCP
+          port: http
+  # No egress rules: the service makes no outbound calls (not even DNS),
+  # so all egress is denied. Add explicit rules here if that changes.
+  egress: []

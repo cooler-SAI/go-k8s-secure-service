@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -27,26 +27,26 @@ const (
 	shutdownTimeout = 10 * time.Second
 )
 
-func mainPage(w http.ResponseWriter, _ *http.Request) {
+func mainPage(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	_, err := fmt.Fprintln(w, "Hello, World!")
 	if err != nil {
-		log.Printf("Error writing response: %v\n", err)
+		slog.Error("failed to write response", "path", r.URL.Path, "error", err)
 		return
 	}
 }
 
-func livezHandler(w http.ResponseWriter, _ *http.Request) {
+func livezHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	_, err := fmt.Fprintln(w, "OK")
 	if err != nil {
-		log.Printf("Error writing response: %v\n", err)
+		slog.Error("failed to write response", "path", r.URL.Path, "error", err)
 		return
 	}
 }
 
 func readyzHandler(isReady *atomic.Bool) http.HandlerFunc {
-	return func(w http.ResponseWriter, _ *http.Request) {
+	return func(w http.ResponseWriter, r *http.Request) {
 		if isReady != nil && !isReady.Load() {
 			http.Error(w, "Not Ready", http.StatusServiceUnavailable)
 			return
@@ -54,7 +54,7 @@ func readyzHandler(isReady *atomic.Bool) http.HandlerFunc {
 		w.WriteHeader(http.StatusOK)
 		_, err := fmt.Fprintln(w, "OK")
 		if err != nil {
-			log.Printf("Error writing response: %v\n", err)
+			slog.Error("failed to write response", "path", r.URL.Path, "error", err)
 			return
 		}
 	}
@@ -79,6 +79,9 @@ func newServer(addr string, handler http.Handler) *http.Server {
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      10 * time.Second,
 		IdleTimeout:       60 * time.Second,
+		// Route net/http's internal errors (TLS handshakes, panics in
+		// handlers, Accept failures) through slog instead of the std logger.
+		ErrorLog: slog.NewLogLogger(slog.Default().Handler(), slog.LevelError),
 	}
 }
 
@@ -90,7 +93,7 @@ func run(ctx context.Context, ln net.Listener, drainDelay time.Duration) error {
 
 	serverErr := make(chan error, 1)
 	go func() {
-		log.Printf("Server starting on %s...\n", ln.Addr())
+		slog.Info("server starting", "addr", ln.Addr().String())
 		if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			serverErr <- err
 		}
@@ -102,7 +105,8 @@ func run(ctx context.Context, ln net.Listener, drainDelay time.Duration) error {
 		return fmt.Errorf("server error: %w", err)
 	case <-ctx.Done():
 		isReady.Store(false)
-		log.Printf("Shutdown signal received (SIGTERM/SIGINT), reporting not-ready and draining for %s...\n", drainDelay)
+		slog.Info("shutdown signal received, reporting not-ready and draining",
+			"drain_delay", drainDelay.String())
 
 		// Keep accepting connections while endpoint removal propagates;
 		// closing the listener immediately would refuse requests that are
@@ -113,28 +117,39 @@ func run(ctx context.Context, ln net.Listener, drainDelay time.Duration) error {
 		case <-time.After(drainDelay):
 		}
 
-		log.Println("Drain delay elapsed, shutting down HTTP server...")
+		slog.Info("drain delay elapsed, shutting down HTTP server",
+			"shutdown_timeout", shutdownTimeout.String())
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 		defer cancel()
 
 		if err := srv.Shutdown(shutdownCtx); err != nil {
 			return fmt.Errorf("graceful shutdown failed: %w", err)
 		}
-		log.Println("Server gracefully stopped.")
+		slog.Info("server gracefully stopped")
 		return nil
 	}
 }
 
 func main() {
+	// JSON logs on stdout for container log collectors. SetDefault also
+	// redirects the std "log" package through this handler.
+	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
+
+	if err := serve(); err != nil {
+		slog.Error("server terminated with error", "error", err)
+		os.Exit(1)
+	}
+}
+
+func serve() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	ln, err := net.Listen("tcp", ":8080")
+	const addr = ":8080"
+	ln, err := net.Listen("tcp", addr)
 	if err != nil {
-		log.Fatalf("Failed to listen on :8080: %v\n", err)
+		return fmt.Errorf("failed to listen on %s: %w", addr, err)
 	}
 
-	if err := run(ctx, ln, shutdownDelay); err != nil {
-		log.Fatalf("Server terminated with error: %v\n", err)
-	}
+	return run(ctx, ln, shutdownDelay)
 }
