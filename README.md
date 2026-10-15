@@ -11,6 +11,7 @@ A lightweight, secure Go HTTP service designed for containerized deployment and 
 ## Features
 
 - **Root Endpoint (`/`)**: Returns a basic greeting (`Hello, World!`) with HTTP status 200 OK. Unknown paths return 404 Not Found.
+- **Method Restriction**: All endpoints accept only `GET` (and `HEAD`); other methods receive `405 Method Not Allowed` with an `Allow` header.
 - **Kubernetes Liveness Probe (`/livez`)**: Provides a dedicated health probe endpoint for orchestrators (e.g., Kubernetes `livenessProbe`) to monitor service vitality.
 - **Kubernetes Readiness Probe (`/readyz`)**: Signals service readiness to receive incoming traffic (Kubernetes `readinessProbe`). Automatically switches to `503 Service Unavailable` on shutdown signals to immediately stop traffic ingress before connection draining completes.
 - **Graceful Shutdown (`SIGTERM` / `SIGINT`)**: Listens for termination signals from Kubernetes (`SIGTERM`) or process interruptions (`SIGINT`), reporting not-ready and continuing to serve for a 5-second drain delay while endpoint removal propagates, then running a graceful shutdown (`srv.Shutdown()`) with a 10-second window for in-flight requests.
@@ -24,13 +25,22 @@ A lightweight, secure Go HTTP service designed for containerized deployment and 
 
 ```text
 go-k8s-secure-service/
+├── .github/workflows/
+│   ├── ci.yml          # gofmt, vet, race-enabled tests, and build
+│   └── trivy.yml       # Trivy repo and container image security scans
 ├── .idea/              # IDE configuration
+├── k8s/
+│   ├── deployment.yaml # Hardened Deployment (security context, probes, resources)
+│   ├── service.yaml    # ClusterIP Service exposing the HTTP port
+│   └── pdb.yaml        # PodDisruptionBudget keeping a replica up during disruptions
 ├── .gitignore          # Git ignore rules
 ├── .dockerignore       # Excludes development files from the build context
 ├── Dockerfile          # Multi-stage hardened container build
 ├── go.mod              # Go module definition and dependencies
+├── LICENSE             # MIT License
 ├── main.go             # Application entry point, server configuration, and HTTP handlers
 ├── main_test.go        # Unit and integration test suite
+├── trivy.yaml          # Shared Trivy scanner configuration
 └── README.md           # Project documentation
 ```
 
@@ -151,19 +161,27 @@ The drain delay (5s) plus the shutdown timeout (10s) must stay below the pod's
 `terminationGracePeriodSeconds` (30s in `k8s/deployment.yaml`); otherwise the
 kubelet sends `SIGKILL` before draining finishes.
 
-### Deployment Manifest
+### Kubernetes Manifests
 
-The hardened Deployment manifest is maintained at
-[`k8s/deployment.yaml`](k8s/deployment.yaml). It runs two replicas as UID/GID
-`65532`, disables service-account token mounting, uses a read-only root
-filesystem, drops Linux capabilities, sets resource requests and limits, and
-configures the `/livez` and `/readyz` probes.
+The manifests live in [`k8s/`](k8s/):
+
+- [`deployment.yaml`](k8s/deployment.yaml): runs two replicas as UID/GID
+  `65532`, disables service-account token mounting, uses a read-only root
+  filesystem, drops Linux capabilities, sets resource requests and limits,
+  configures the `/livez` and `/readyz` probes, and sets `GOMEMLIMIT` to ~90%
+  of the memory limit so the Go GC works harder before the container is
+  OOM-killed.
+- [`service.yaml`](k8s/service.yaml): a `ClusterIP` Service routing port `80`
+  to the container's named `http` port (`8080`).
+- [`pdb.yaml`](k8s/pdb.yaml): a `PodDisruptionBudget` with `minAvailable: 1`,
+  so node drains and cluster upgrades never evict both replicas at once.
 
 Make the `go-k8s-secure-service:v1.0.0` image available to your cluster nodes
-or update the manifest to use an image in your container registry, then apply it:
+or update the manifest to use an image in your container registry, then apply
+everything:
 
 ```bash
-kubectl apply -f k8s/deployment.yaml
+kubectl apply -f k8s/
 ```
 
 ---
@@ -184,4 +202,4 @@ kubectl apply -f k8s/deployment.yaml
 
 ## License
 
-This project is licensed under the MIT License.
+This project is licensed under the MIT License. See [`LICENSE`](LICENSE) for details.

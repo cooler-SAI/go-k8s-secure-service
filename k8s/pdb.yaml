@@ -1,0 +1,16 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: go-k8s-secure-service
+  labels:
+    app: go-k8s-secure-service
+spec:
+  # With 2 replicas, voluntary disruptions (node drains, cluster upgrades)
+  # may evict at most one pod at a time.
+  minAvailable: 1
+  # Allow evicting pods that never became ready, so a broken rollout cannot
+  # block node drains.
+  unhealthyPodEvictionPolicy: AlwaysAllow
+  selector:
+    matchLabels:
+      app: go-k8s-secure-service

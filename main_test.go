@@ -12,41 +12,18 @@ import (
 )
 
 func TestMainPage(t *testing.T) {
-	tests := []struct {
-		name           string
-		path           string
-		expectedStatus int
-		expectedBody   string
-	}{
-		{
-			name:           "root path returns greeting",
-			path:           "/",
-			expectedStatus: http.StatusOK,
-			expectedBody:   "Hello, World!\n",
-		},
-		{
-			name:           "non-root path returns 404",
-			path:           "/unknown",
-			expectedStatus: http.StatusNotFound,
-			expectedBody:   "404 page not found\n",
-		},
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rr := httptest.NewRecorder()
+
+	mainPage(rr, req)
+
+	if status := rr.Code; status != http.StatusOK {
+		t.Errorf("mainPage returned wrong status code: got %v want %v", status, http.StatusOK)
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			req := httptest.NewRequest(http.MethodGet, tt.path, nil)
-			rr := httptest.NewRecorder()
-
-			mainPage(rr, req)
-
-			if status := rr.Code; status != tt.expectedStatus {
-				t.Errorf("mainPage returned wrong status code: got %v want %v", status, tt.expectedStatus)
-			}
-
-			if body := rr.Body.String(); body != tt.expectedBody {
-				t.Errorf("mainPage returned unexpected body: got %q want %q", body, tt.expectedBody)
-			}
-		})
+	expected := "Hello, World!\n"
+	if body := rr.Body.String(); body != expected {
+		t.Errorf("mainPage returned unexpected body: got %q want %q", body, expected)
 	}
 }
 
@@ -128,48 +105,94 @@ func TestRouter(t *testing.T) {
 
 	tests := []struct {
 		name           string
+		method         string
 		path           string
 		expectedStatus int
 		expectedBody   string
+		expectedAllow  string
 	}{
 		{
 			name:           "route /",
+			method:         http.MethodGet,
 			path:           "/",
 			expectedStatus: http.StatusOK,
 			expectedBody:   "Hello, World!\n",
 		},
 		{
 			name:           "route /livez",
+			method:         http.MethodGet,
 			path:           "/livez",
 			expectedStatus: http.StatusOK,
 			expectedBody:   "OK\n",
 		},
 		{
 			name:           "route /readyz when ready",
+			method:         http.MethodGet,
 			path:           "/readyz",
 			expectedStatus: http.StatusOK,
 			expectedBody:   "OK\n",
 		},
 		{
 			name:           "route unknown",
+			method:         http.MethodGet,
 			path:           "/random",
 			expectedStatus: http.StatusNotFound,
 			expectedBody:   "404 page not found\n",
+		},
+		{
+			name:           "trailing slash on probe is not matched",
+			method:         http.MethodGet,
+			path:           "/livez/",
+			expectedStatus: http.StatusNotFound,
+			expectedBody:   "404 page not found\n",
+		},
+		{
+			name:           "HEAD / is allowed",
+			method:         http.MethodHead,
+			path:           "/",
+			expectedStatus: http.StatusOK,
+		},
+		{
+			name:           "POST / is rejected",
+			method:         http.MethodPost,
+			path:           "/",
+			expectedStatus: http.StatusMethodNotAllowed,
+			expectedBody:   "Method Not Allowed\n",
+			expectedAllow:  "GET, HEAD",
+		},
+		{
+			name:           "DELETE /livez is rejected",
+			method:         http.MethodDelete,
+			path:           "/livez",
+			expectedStatus: http.StatusMethodNotAllowed,
+			expectedBody:   "Method Not Allowed\n",
+			expectedAllow:  "GET, HEAD",
+		},
+		{
+			name:           "PUT /readyz is rejected",
+			method:         http.MethodPut,
+			path:           "/readyz",
+			expectedStatus: http.StatusMethodNotAllowed,
+			expectedBody:   "Method Not Allowed\n",
+			expectedAllow:  "GET, HEAD",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			req := httptest.NewRequest(http.MethodGet, tt.path, nil)
+			req := httptest.NewRequest(tt.method, tt.path, nil)
 			rr := httptest.NewRecorder()
 
 			router.ServeHTTP(rr, req)
 
 			if rr.Code != tt.expectedStatus {
-				t.Errorf("%s returned status %d, want %d", tt.path, rr.Code, tt.expectedStatus)
+				t.Errorf("%s %s returned status %d, want %d", tt.method, tt.path, rr.Code, tt.expectedStatus)
 			}
 			if !strings.Contains(rr.Body.String(), tt.expectedBody) {
-				t.Errorf("%s returned body %q, want %q", tt.path, rr.Body.String(), tt.expectedBody)
+				t.Errorf("%s %s returned body %q, want %q", tt.method, tt.path, rr.Body.String(), tt.expectedBody)
+			}
+			if allow := rr.Header().Get("Allow"); allow != tt.expectedAllow {
+				t.Errorf("%s %s returned Allow %q, want %q", tt.method, tt.path, allow, tt.expectedAllow)
 			}
 		})
 	}

@@ -31,6 +31,12 @@ spec:
           ports:
             - containerPort: 8080
               name: http
+          env:
+            # Soft memory limit for the Go GC, ~90% of limits.memory (64Mi),
+            # so the runtime collects harder before the kernel OOM-kills it.
+            # Keep in sync with resources.limits.memory.
+            - name: GOMEMLIMIT
+              value: "57MiB"
           # Container-level security settings
           securityContext:
             allowPrivilegeEscalation: false

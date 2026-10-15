@@ -27,11 +27,7 @@ const (
 	shutdownTimeout = 10 * time.Second
 )
 
-func mainPage(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != "/" {
-		http.NotFound(w, r)
-		return
-	}
+func mainPage(w http.ResponseWriter, _ *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	_, err := fmt.Fprintln(w, "Hello, World!")
 	if err != nil {
@@ -65,10 +61,13 @@ func readyzHandler(isReady *atomic.Bool) http.HandlerFunc {
 }
 
 func setupRouter(isReady *atomic.Bool) http.Handler {
+	// Method-qualified patterns: GET also matches HEAD, other methods get
+	// 405 Method Not Allowed. "/{$}" matches only the exact root path, so
+	// unknown paths fall through to the mux's 404.
 	mux := http.NewServeMux()
-	mux.HandleFunc("/", mainPage)
-	mux.HandleFunc("/livez", livezHandler)
-	mux.HandleFunc("/readyz", readyzHandler(isReady))
+	mux.HandleFunc("GET /{$}", mainPage)
+	mux.HandleFunc("GET /livez", livezHandler)
+	mux.HandleFunc("GET /readyz", readyzHandler(isReady))
 	return mux
 }
 
