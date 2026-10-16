@@ -5,6 +5,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -326,5 +327,64 @@ func TestRunServeError(t *testing.T) {
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("run did not return after serve error")
+	}
+}
+
+func TestGetListenAddr(t *testing.T) {
+	tests := []struct {
+		name     string
+		envPort  string
+		setEnv   bool
+		expected string
+	}{
+		{
+			name:     "default when unset",
+			setEnv:   false,
+			expected: ":8080",
+		},
+		{
+			name:     "default when empty",
+			envPort:  "",
+			setEnv:   true,
+			expected: ":8080",
+		},
+		{
+			name:     "default when whitespace only",
+			envPort:  "   ",
+			setEnv:   true,
+			expected: ":8080",
+		},
+		{
+			name:     "custom port without colon",
+			envPort:  "9090",
+			setEnv:   true,
+			expected: ":9090",
+		},
+		{
+			name:     "custom port with colon",
+			envPort:  ":3000",
+			setEnv:   true,
+			expected: ":3000",
+		},
+		{
+			name:     "custom port with surrounding whitespace",
+			envPort:  "  8443  ",
+			setEnv:   true,
+			expected: ":8443",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.setEnv {
+				t.Setenv("PORT", tt.envPort)
+			} else {
+				t.Setenv("PORT", "")
+				os.Unsetenv("PORT")
+			}
+			if addr := getListenAddr(); addr != tt.expected {
+				t.Errorf("getListenAddr() = %q, want %q", addr, tt.expected)
+			}
+		})
 	}
 }

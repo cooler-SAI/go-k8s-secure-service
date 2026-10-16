@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -130,6 +131,20 @@ func run(ctx context.Context, ln net.Listener, drainDelay time.Duration) error {
 	}
 }
 
+// getListenAddr resolves the server listen address. If the PORT environment
+// variable is set, it binds to that port (e.g. "8080" or ":8080").
+// If unset or empty, it defaults to ":8080".
+func getListenAddr() string {
+	port := strings.TrimSpace(os.Getenv("PORT"))
+	if port == "" {
+		return ":8080"
+	}
+	if !strings.HasPrefix(port, ":") {
+		return ":" + port
+	}
+	return port
+}
+
 func main() {
 	// JSON logs on stdout for container log collectors. SetDefault also
 	// redirects the std "log" package through this handler.
@@ -145,7 +160,7 @@ func serve() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	const addr = ":8080"
+	addr := getListenAddr()
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		return fmt.Errorf("failed to listen on %s: %w", addr, err)
