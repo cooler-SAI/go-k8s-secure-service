@@ -12,6 +12,7 @@ A lightweight, secure Go HTTP service designed for containerized deployment and 
 
 - **Root Endpoint (`/`)**: Returns a basic greeting (`Hello, World!`) with HTTP status 200 OK. Unknown paths return 404 Not Found.
 - **Method Restriction**: All endpoints accept only `GET` (and `HEAD`); other methods receive `405 Method Not Allowed` with an `Allow` header.
+- **Configurable Listen Port**: Reads the standard `PORT` environment variable (e.g., `PORT=8080` or `PORT=:8080`) to bind to custom ports, defaulting to `:8080` for container and Kubernetes environments.
 - **Kubernetes Liveness Probe (`/livez`)**: Provides a dedicated health probe endpoint for orchestrators (e.g., Kubernetes `livenessProbe`) to monitor service vitality.
 - **Kubernetes Readiness Probe (`/readyz`)**: Signals service readiness to receive incoming traffic (Kubernetes `readinessProbe`). Automatically switches to `503 Service Unavailable` on shutdown signals to immediately stop traffic ingress before connection draining completes.
 - **Graceful Shutdown (`SIGTERM` / `SIGINT`)**: Listens for termination signals from Kubernetes (`SIGTERM`) or process interruptions (`SIGINT`), reporting not-ready and continuing to serve for a 5-second drain delay while endpoint removal propagates, then running a graceful shutdown (`srv.Shutdown()`) with a 10-second window for in-flight requests.
@@ -35,6 +36,7 @@ go-k8s-secure-service/
 │   ├── service.yaml       # ClusterIP Service exposing the HTTP port
 │   ├── pdb.yaml           # PodDisruptionBudget keeping a replica up during disruptions
 │   └── networkpolicy.yaml # Default-deny NetworkPolicy allowing only HTTP ingress
+├── .aiignore           # AI tool ignore rules
 ├── .gitignore          # Git ignore rules
 ├── .dockerignore       # Excludes development files from the build context
 ├── Dockerfile          # Multi-stage hardened container build
@@ -69,27 +71,26 @@ go-k8s-secure-service/
    go run main.go
    ```
 
-3. The server will start listening on port `:8080`:
+3. The server will start listening on port `:8080` (or the port specified by `$PORT`):
    ```text
    {"time":"2026-10-16T01:42:19.704+03:00","level":"INFO","msg":"server starting","addr":"[::]:8080"}
    ```
 
 ### Configuration and Environment Variables
 
-The service currently uses fixed settings defined in `main.go`; it does not read
-configuration from environment variables or command-line flags.
+The service supports configuring the listen port through the standard `PORT` environment variable. Operational timeouts and shutdown intervals use production-tuned defaults defined in `main.go`.
 
-| Setting | Current value | Description |
-| --- | --- | --- |
-| Listen address | `:8080` | Binds the HTTP server to port 8080 on all network interfaces. |
-| Read-header timeout | 5 seconds | Limits the time allowed to read request headers. |
-| Read timeout | 10 seconds | Limits the time allowed to read the full request. |
-| Write timeout | 10 seconds | Limits the time allowed to write a response. |
-| Idle timeout | 60 seconds | Limits how long an idle keep-alive connection remains open. |
-| Shutdown drain delay | 5 seconds | Time the server keeps serving (while `/readyz` reports 503) after a termination signal, before closing the listener. |
-| Shutdown timeout | 10 seconds | Maximum time allowed for in-flight requests to finish once the listener is closed. |
+| Setting | Configuration | Default | Description |
+| --- | --- | --- | --- |
+| Listen port | `PORT` env var | `:8080` | Binds the HTTP server to the specified port on all network interfaces (e.g., `PORT=8080` or `PORT=:8080`). |
+| Read-header timeout | Fixed (`main.go`) | 5 seconds | Limits the time allowed to read request headers. |
+| Read timeout | Fixed (`main.go`) | 10 seconds | Limits the time allowed to read the full request. |
+| Write timeout | Fixed (`main.go`) | 10 seconds | Limits the time allowed to write a response. |
+| Idle timeout | Fixed (`main.go`) | 60 seconds | Limits how long an idle keep-alive connection remains open. |
+| Shutdown drain delay | Fixed (`main.go`) | 5 seconds | Time the server keeps serving (while `/readyz` reports 503) after a termination signal, before closing the listener. |
+| Shutdown timeout | Fixed (`main.go`) | 10 seconds | Maximum time allowed for in-flight requests to finish once the listener is closed. |
 
-To change these settings, update the corresponding server configuration in
+To change the timeout settings, update the corresponding server configuration in
 `main.go`. The Kubernetes container port and probe ports should match the
 configured listen port.
 
@@ -203,6 +204,7 @@ kubectl apply -f k8s/
 - [x] **Security Scanning**: Trivy scans dependencies, Dockerfile/Kubernetes misconfigurations, and secrets in the repo, plus the built container image, failing on HIGH/CRITICAL findings and uploading SARIF to GitHub Code Scanning. All actions are pinned to commit SHAs (`.github/workflows/trivy.yml`).
 - [x] **Readiness Probe**: Add `/readyz` for traffic readiness verification.
 - [x] **Structured Logging**: Structured JSON logging on stdout via `log/slog`, including `net/http` internal errors.
+- [x] **Configurable Environment**: Support configuring the HTTP listen port via the standard `PORT` environment variable.
 - [x] **Containerization & Hardening**: Multi-stage distroless image, static binary, non-root runtime user, and hardened Kubernetes `SecurityContext` example.
 - [x] **Network Policy**: Least-privilege Kubernetes `NetworkPolicy`: ingress only on the HTTP port from the same namespace and the ingress controller, all egress denied.
 
