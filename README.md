@@ -209,9 +209,32 @@ The manifests live in [`k8s/`](k8s/):
   containers running as `runAsUser: 0`, deny privileged containers, and
   require liveness/readiness probes and CPU/memory limits. System namespaces
   are excluded. They are not applied by `kubectl apply -f k8s/`; install
-  Kyverno and apply them with `kubectl apply -f k8s/policies/*.yaml`. Policy
+  Kyverno and apply them with `kubectl apply -f k8s/policies/`. Policy
   tests (`kyverno test k8s/policies/tests`) run offline against fixture pods
   and `deployment.yaml`, and CI runs them on every push and PR.
+  `verify-image-signature.yaml` additionally requires images from
+  `ghcr.io/cooler-sai/go-k8s-secure-service` to carry a Cosign keyless
+  signature from the release workflow (see below); it only matches that
+  registry path, so locally built images are unaffected.
+
+### Supply Chain: SBOM and Image Signing
+
+- **SBOM**: CI generates a Software Bill of Materials for the container image
+  with Trivy in both SPDX (`sbom.spdx.json`) and CycloneDX (`sbom.cdx.json`)
+  formats, uploaded as the `sbom` workflow artifact on every push and PR
+  (`.github/workflows/trivy.yml`).
+- **Release**: pushing a `v*` tag runs `.github/workflows/release.yml`, which
+  builds and pushes `ghcr.io/cooler-sai/go-k8s-secure-service:<tag>`, signs
+  the image digest with Cosign keyless signing (Sigstore Fulcio + Rekor, no
+  long-lived keys), and attaches both SBOMs as signed attestations.
+- **Verify a signature manually**:
+  ```bash
+  cosign verify ghcr.io/cooler-sai/go-k8s-secure-service:v1.0.0 \
+    --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+    --certificate-identity-regexp '^https://github\.com/cooler-SAI/go-k8s-secure-service/\.github/workflows/release\.yml@refs/tags/v.*$'
+  ```
+- **Cluster enforcement**: the `verify-image-signature` Kyverno policy applies
+  the same identity check at admission time.
 
 Make the `go-k8s-secure-service:v1.0.0` image available to your cluster nodes
 or update the manifest to use an image in your container registry, then apply
@@ -236,6 +259,7 @@ kubectl apply -f k8s/
 - [x] **Containerization & Hardening**: Multi-stage distroless image, static binary, non-root runtime user, and hardened Kubernetes `SecurityContext` example.
 - [x] **Network Policy**: Least-privilege Kubernetes `NetworkPolicy`: ingress only on the HTTP port from the same namespace and the ingress controller, all egress denied.
 - [x] **Admission Policies (Kyverno)**: `ClusterPolicy` rules for non-root, non-privileged containers, mandatory probes and resource limits, validated offline in CI with `kyverno test`.
+- [x] **SBOM & Image Signing (Cosign)**: Trivy-generated SPDX/CycloneDX SBOMs in CI, keyless Cosign signing and SBOM attestations on release, and a Kyverno policy that verifies the signature at admission.
 
 ---
 

@@ -93,3 +93,28 @@ jobs:
         with:
           sarif_file: 'trivy-image.sarif'
           category: 'trivy-image'
+
+      # SBOMs of the image built from this commit (SPDX and CycloneDX).
+      - name: Generate SBOM (SPDX)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: 'image'
+          image-ref: 'go-k8s-secure-service:${{ github.sha }}'
+          format: 'spdx-json'
+          output: 'sbom.spdx.json'
+
+      - name: Generate SBOM (CycloneDX)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: 'image'
+          image-ref: 'go-k8s-secure-service:${{ github.sha }}'
+          format: 'cyclonedx'
+          output: 'sbom.cdx.json'
+
+      - name: Upload SBOMs
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: sbom
+          path: |
+            sbom.spdx.json
+            sbom.cdx.json
