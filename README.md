@@ -20,8 +20,9 @@ A lightweight, secure Go HTTP service designed for containerized deployment and 
 | **Security Scanning** | **Verified (Trivy SARIF)** | Automated weekly and PR/push scans covering repository dependencies, container image, secret detection, and IaC/Kubernetes configurations (`CRITICAL,HIGH` threshold). |
 | **Dependencies** | **Minimal (one direct)** | Built on the Go standard library (`net/http`, `os/signal`, `sync/atomic`) plus a single direct dependency, [`zerolog`](https://github.com/rs/zerolog), for structured logging. Dependencies are scanned by Trivy. |
 | **Container Hardening** | **Distroless Non-Root (`65532:65532`)** | Multi-stage build (`golang:1.27.2-alpine` builder) deploying to `gcr.io/distroless/static-debian12:nonroot` with read-only rootfs and dropped Linux capabilities. |
-| **Kubernetes Compliance** | **Production Baseline Manifests** | Hardened `Deployment` (probes, non-root `SecurityContext`, `GOMEMLIMIT`), `ClusterIP Service`, `PodDisruptionBudget`, and least-privilege `NetworkPolicy` (default deny egress, restricted ingress). |
-| **CI/CD Automation** | **Active (GitHub Actions)** | Continuous integration enforcing formatting (`gofmt`), code vet (`go vet`), test suite with race detector, static binary build verification, and Trivy security scanning. |
+| **Kubernetes Compliance** | **Production Baseline Manifests** | Hardened `Deployment` (probes, non-root `SecurityContext`, `GOMEMLIMIT`), `ClusterIP Service`, `PodDisruptionBudget`, least-privilege `NetworkPolicy` (default deny egress, restricted ingress), and Kyverno `ClusterPolicy` rules (non-root, non-privileged, probes, resource limits). |
+| **CI/CD Automation** | **Active (GitHub Actions)** | Continuous integration enforcing formatting (`gofmt`), code vet (`go vet`), test suite with race detector, static binary build verification, offline Kyverno policy tests, a kind E2E smoke test under the `restricted` Pod Security profile, and Trivy security scanning. |
+| **Supply Chain** | **SBOM + Signed Releases** | Trivy-generated SPDX/CycloneDX SBOMs, and tagged releases pushed to GHCR with keyless Cosign signatures and SBOM attestations, verified at admission by Kyverno. |
 
 ---
 
@@ -49,19 +50,25 @@ A lightweight, secure Go HTTP service designed for containerized deployment and 
 ```text
 go-k8s-secure-service/
 ├── .github/workflows/
-│   ├── ci.yml          # gofmt, vet, race-enabled tests, and build
-│   └── trivy.yml       # Trivy repo and container image security scans
+│   ├── ci.yml          # gofmt, vet, race-enabled tests, build, Kyverno policy tests, kind E2E
+│   ├── trivy.yml       # Trivy repo and container image scans, SBOM generation
+│   └── release.yml     # Tag release: GHCR push, SBOMs, keyless Cosign signing
 ├── .idea/              # IDE configuration
+├── e2e/
+│   ├── namespace.yaml     # Namespace enforcing the restricted Pod Security profile
+│   └── smoke.sh           # Deploys to a cluster and checks endpoints via port-forward
 ├── k8s/
 │   ├── deployment.yaml    # Hardened Deployment (security context, probes, resources)
 │   ├── service.yaml       # ClusterIP Service exposing the HTTP port
 │   ├── pdb.yaml           # PodDisruptionBudget keeping a replica up during disruptions
-│   └── networkpolicy.yaml # Default-deny NetworkPolicy allowing only HTTP ingress
+│   ├── networkpolicy.yaml # Default-deny NetworkPolicy allowing only HTTP ingress
+│   └── policies/          # Kyverno ClusterPolicies and offline tests (tests/)
 ├── .aiignore           # AI tool ignore rules
 ├── .gitignore          # Git ignore rules
 ├── .dockerignore       # Excludes development files from the build context
 ├── Dockerfile          # Multi-stage hardened container build
 ├── go.mod              # Go module definition and dependencies
+├── go.sum              # Dependency checksums
 ├── LICENSE             # MIT License
 ├── main.go             # Application entry point, server configuration, and HTTP handlers
 ├── main_test.go        # Unit and integration test suite
