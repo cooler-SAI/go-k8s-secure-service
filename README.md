@@ -18,7 +18,7 @@ A lightweight, secure Go HTTP service designed for containerized deployment and 
 | **Development Lifecycle** | **Stable / Production-Ready Baseline** | Core microservice architecture, Kubernetes orchestration manifests, and security hardening are complete. |
 | **Build & Test Suite** | **Passing (100%)** | Unit and integration tests verify handlers, routing, server timeout settings, and shutdown lifecycle with **70.3%** statement coverage. Race detection runs in CI. |
 | **Security Scanning** | **Verified (Trivy SARIF)** | Automated weekly and PR/push scans covering repository dependencies, container image, secret detection, and IaC/Kubernetes configurations (`CRITICAL,HIGH` threshold). |
-| **Dependencies** | **Zero External (Stdlib Only)** | Built entirely on the Go standard library (`net/http`, `log/slog`, `os/signal`, `sync/atomic`), eliminating third-party supply-chain attack vectors. |
+| **Dependencies** | **Minimal (one direct)** | Built on the Go standard library (`net/http`, `os/signal`, `sync/atomic`) plus a single direct dependency, [`zerolog`](https://github.com/rs/zerolog), for structured logging. Dependencies are scanned by Trivy. |
 | **Container Hardening** | **Distroless Non-Root (`65532:65532`)** | Multi-stage build (`golang:1.27.2-alpine` builder) deploying to `gcr.io/distroless/static-debian12:nonroot` with read-only rootfs and dropped Linux capabilities. |
 | **Kubernetes Compliance** | **Production Baseline Manifests** | Hardened `Deployment` (probes, non-root `SecurityContext`, `GOMEMLIMIT`), `ClusterIP Service`, `PodDisruptionBudget`, and least-privilege `NetworkPolicy` (default deny egress, restricted ingress). |
 | **CI/CD Automation** | **Active (GitHub Actions)** | Continuous integration enforcing formatting (`gofmt`), code vet (`go vet`), test suite with race detector, static binary build verification, and Trivy security scanning. |
@@ -38,7 +38,7 @@ A lightweight, secure Go HTTP service designed for containerized deployment and 
 - **Kubernetes Readiness Probe (`/readyz`)**: Signals service readiness to receive incoming traffic (Kubernetes `readinessProbe`). Automatically switches to `503 Service Unavailable` on shutdown signals to immediately stop traffic ingress before connection draining completes.
 - **Graceful Shutdown (`SIGTERM` / `SIGINT`)**: Listens for termination signals from Kubernetes (`SIGTERM`) or process interruptions (`SIGINT`), reporting not-ready and continuing to serve for a 5-second drain delay while endpoint removal propagates, then running a graceful shutdown (`srv.Shutdown()`) with a 10-second window for in-flight requests.
 - **Hardened HTTP Timeouts**: Explicitly configures `ReadHeaderTimeout`, `ReadTimeout`, `WriteTimeout`, and `IdleTimeout` to mitigate Slowloris and connection starvation attacks.
-- **Structured Logging**: Emits JSON logs to stdout with `log/slog`, ready for container log collectors (Loki, Fluent Bit, Cloud Logging, etc.). `net/http` internal errors go through the same handler.
+- **Structured Logging**: Emits JSON logs to stdout with `zerolog`, ready for container log collectors (Loki, Fluent Bit, Cloud Logging, etc.). `net/http` internal errors go through the same handler.
 - **Hardened Container Image**: Uses a multi-stage build and a minimal distroless runtime, runs as a non-root user, and builds a static binary.
 - **Comprehensive Unit Tests**: High-coverage test suite verifying handlers, routing, server timeout settings, and shutdown lifecycle.
 
@@ -224,7 +224,7 @@ kubectl apply -f k8s/
 - [x] **Automated Testing & CI/CD**: Unit testing with `net/http/httptest`; GitHub Actions runs `gofmt`, `go vet`, race-enabled tests, and a build on every push and PR (`.github/workflows/ci.yml`).
 - [x] **Security Scanning**: Trivy scans dependencies, Dockerfile/Kubernetes misconfigurations, and secrets in the repo, plus the built container image, failing on HIGH/CRITICAL findings and uploading SARIF to GitHub Code Scanning. All actions are pinned to commit SHAs (`.github/workflows/trivy.yml`).
 - [x] **Readiness Probe**: Add `/readyz` for traffic readiness verification.
-- [x] **Structured Logging**: Structured JSON logging on stdout via `log/slog`, including `net/http` internal errors.
+- [x] **Structured Logging**: Structured JSON logging on stdout via `zerolog`, including `net/http` internal errors.
 - [x] **Configurable Environment**: Support configuring the HTTP listen port via the standard `PORT` environment variable.
 - [x] **Containerization & Hardening**: Multi-stage distroless image, static binary, non-root runtime user, and hardened Kubernetes `SecurityContext` example.
 - [x] **Network Policy**: Least-privilege Kubernetes `NetworkPolicy`: ingress only on the HTTP port from the same namespace and the ingress controller, all egress denied.

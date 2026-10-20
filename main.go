@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
+	stdlog "log"
 	"net"
 	"net/http"
 	"os"
@@ -13,6 +13,9 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
+
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 )
 
 const (
@@ -32,7 +35,7 @@ func mainPage(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	_, err := fmt.Fprintln(w, "Hello, World!")
 	if err != nil {
-		slog.Error("failed to write response", "path", r.URL.Path, "error", err)
+		log.Error().Err(err).Str("path", r.URL.Path).Msg("failed to write response")
 		return
 	}
 }
@@ -41,7 +44,7 @@ func livezHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	_, err := fmt.Fprintln(w, "OK")
 	if err != nil {
-		slog.Error("failed to write response", "path", r.URL.Path, "error", err)
+		log.Error().Err(err).Str("path", r.URL.Path).Msg("failed to write response")
 		return
 	}
 }
@@ -55,7 +58,7 @@ func readyzHandler(isReady *atomic.Bool) http.HandlerFunc {
 		w.WriteHeader(http.StatusOK)
 		_, err := fmt.Fprintln(w, "OK")
 		if err != nil {
-			slog.Error("failed to write response", "path", r.URL.Path, "error", err)
+			log.Error().Err(err).Str("path", r.URL.Path).Msg("failed to write response")
 			return
 		}
 	}
@@ -81,8 +84,8 @@ func newServer(addr string, handler http.Handler) *http.Server {
 		WriteTimeout:      10 * time.Second,
 		IdleTimeout:       60 * time.Second,
 		// Route net/http's internal errors (TLS handshakes, panics in
-		// handlers, Accept failures) through slog instead of the std logger.
-		ErrorLog: slog.NewLogLogger(slog.Default().Handler(), slog.LevelError),
+		// handlers, Accept failures) through zerolog instead of the std logger.
+		ErrorLog: stdlog.New(log.Logger.With().Str("component", "net/http").Logger(), "", 0),
 	}
 }
 
@@ -94,7 +97,7 @@ func run(ctx context.Context, ln net.Listener, drainDelay time.Duration) error {
 
 	serverErr := make(chan error, 1)
 	go func() {
-		slog.Info("server starting", "addr", ln.Addr().String())
+		log.Info().Str("addr", ln.Addr().String()).Msg("server starting")
 		if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			serverErr <- err
 		}
@@ -106,8 +109,8 @@ func run(ctx context.Context, ln net.Listener, drainDelay time.Duration) error {
 		return fmt.Errorf("server error: %w", err)
 	case <-ctx.Done():
 		isReady.Store(false)
-		slog.Info("shutdown signal received, reporting not-ready and draining",
-			"drain_delay", drainDelay.String())
+		log.Info().Str("drain_delay", drainDelay.String()).
+			Msg("shutdown signal received, reporting not-ready and draining")
 
 		// Keep accepting connections while endpoint removal propagates;
 		// closing the listener immediately would refuse requests that are
@@ -118,15 +121,15 @@ func run(ctx context.Context, ln net.Listener, drainDelay time.Duration) error {
 		case <-time.After(drainDelay):
 		}
 
-		slog.Info("drain delay elapsed, shutting down HTTP server",
-			"shutdown_timeout", shutdownTimeout.String())
+		log.Info().Str("shutdown_timeout", shutdownTimeout.String()).
+			Msg("drain delay elapsed, shutting down HTTP server")
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 		defer cancel()
 
 		if err := srv.Shutdown(shutdownCtx); err != nil {
 			return fmt.Errorf("graceful shutdown failed: %w", err)
 		}
-		slog.Info("server gracefully stopped")
+		log.Info().Msg("server gracefully stopped")
 		return nil
 	}
 }
@@ -146,12 +149,15 @@ func getListenAddr() string {
 }
 
 func main() {
-	// JSON logs on stdout for container log collectors. SetDefault also
-	// redirects the std "log" package through this handler.
-	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
+	// JSON logs on stdout for container log collectors. The global zerolog
+	// logger is also installed as the std "log" package's output.
+	zerolog.TimeFieldFormat = time.RFC3339
+	log.Logger = zerolog.New(os.Stdout).With().Timestamp().Logger()
+	stdlog.SetFlags(0)
+	stdlog.SetOutput(log.Logger)
 
 	if err := serve(); err != nil {
-		slog.Error("server terminated with error", "error", err)
+		log.Error().Err(err).Msg("server terminated with error")
 		os.Exit(1)
 	}
 }
