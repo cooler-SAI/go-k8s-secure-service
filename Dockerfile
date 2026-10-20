@@ -11,6 +11,11 @@ WORKDIR /src
 
 ENV GOTOOLCHAIN=local
 
+# Resolve dependencies first so this layer is cached until go.mod/go.sum change.
+COPY go.mod go.sum ./
+RUN --mount=type=cache,target=/go/pkg/mod \
+    go mod download && go mod verify
+
 COPY . .
 
 RUN --mount=type=cache,target=/go/pkg/mod \
