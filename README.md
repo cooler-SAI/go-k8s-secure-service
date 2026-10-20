@@ -312,7 +312,7 @@ kubectl apply -f k8s/
 
 ---
 
-### Security
+## Security
 
 Found a vulnerability? Please follow [`SECURITY.md`](SECURITY.md) and report it privately instead of opening a public issue.
 
