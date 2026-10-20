@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"net"
 	"net/http"
@@ -387,4 +388,63 @@ func TestGetListenAddr(t *testing.T) {
 			}
 		})
 	}
+}
+
+// FuzzHandler feeds arbitrary request lines through net/http's request
+// parser into the router. Whatever the input, the router must not panic, must
+// not answer with a 5xx, and may only answer 200 for the three known paths
+// with a safe method.
+func FuzzHandler(f *testing.F) {
+	seeds := []struct{ method, target string }{
+		{"GET", "/"},
+		{"GET", "/livez"},
+		{"GET", "/readyz"},
+		{"HEAD", "/livez"},
+		{"POST", "/"},
+		{"DELETE", "/readyz"},
+		{"GET", "/missing"},
+		{"GET", "//livez"},
+		{"GET", "/livez/../readyz"},
+		{"GET", "/%2e%2e/livez"},
+		{"GET", "/livez?x=%zz"},
+		{"GET", "/\x00"},
+		{"OPTIONS", "*"},
+		{"CONNECT", "example.com:443"},
+		{"GET", "http://example.com/readyz"},
+	}
+	for _, s := range seeds {
+		f.Add(s.method, s.target)
+	}
+
+	var isReady atomic.Bool
+	isReady.Store(true)
+	router := setupRouter(&isReady)
+
+	f.Fuzz(func(t *testing.T, method, target string) {
+		raw := method + " " + target + " HTTP/1.1\r\nHost: example.com\r\n\r\n"
+		req, err := http.ReadRequest(bufio.NewReader(strings.NewReader(raw)))
+		if err != nil {
+			t.Skip("rejected by the request parser")
+		}
+
+		rr := httptest.NewRecorder()
+		router.ServeHTTP(rr, req)
+
+		if rr.Code >= 500 {
+			t.Fatalf("%q %q: server error status %d", method, target, rr.Code)
+		}
+		if rr.Code == http.StatusOK {
+			switch req.URL.Path {
+			case "/", "/livez", "/readyz":
+			default:
+				t.Fatalf("%q %q: 200 for unknown path %q", method, target, req.URL.Path)
+			}
+			if req.Method != http.MethodGet && req.Method != http.MethodHead {
+				t.Fatalf("%q %q: 200 for method %q", method, target, req.Method)
+			}
+		}
+		if rr.Code == http.StatusMethodNotAllowed && rr.Header().Get("Allow") == "" {
+			t.Fatalf("%q %q: 405 without Allow header", method, target)
+		}
+	})
 }

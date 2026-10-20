@@ -42,6 +42,11 @@ jobs:
       - name: Test (race detector + coverage)
         run: go test -race -cover ./...
 
+      # The seed corpus already runs as part of the tests above; this adds a
+      # short burst of coverage-guided fuzzing on every run.
+      - name: Fuzz router (30s)
+        run: go test -run '^$' -fuzz FuzzHandler -fuzztime 30s .
+
       - name: Build
         run: CGO_ENABLED=0 go build -trimpath -o /dev/null .
 

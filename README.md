@@ -132,6 +132,16 @@ Execute the unit test suite with coverage report:
 go test -v -cover ./...
 ```
 
+The router is also covered by a native Go fuzz test (`FuzzHandler`) that sends
+arbitrary methods and request targets through `net/http`'s request parser into
+the router and asserts that it never panics, never answers with a 5xx, and
+only returns `200` for the known paths with `GET`/`HEAD`. Its seed corpus runs
+with the normal test suite; to fuzz for a while:
+
+```bash
+go test -run '^$' -fuzz FuzzHandler -fuzztime 60s .
+```
+
 ### Building and Running the Container
 
 Build the image from the repository root:
@@ -288,6 +298,7 @@ kubectl apply -f k8s/
 - [x] **SBOM & Image Signing (Cosign)**: Trivy-generated SPDX/CycloneDX SBOMs in CI, keyless Cosign signing and SBOM attestations on release, and a Kyverno policy that verifies the signature at admission.
 - [x] **E2E Smoke Test (kind)**: GitHub Actions deploys the manifests to a single-node kind cluster under the `restricted` Pod Security profile and checks the endpoints through port-forward.
 - [x] **OpenSSF Scorecard**: Weekly and on-push Scorecard analysis (`.github/workflows/scorecard.yml`) with results published to the public badge and uploaded to GitHub Code Scanning.
+- [x] **Fuzz Testing**: Native Go fuzz test (`FuzzHandler`) for the HTTP router, run for 30 seconds on every CI run.
 
 ---
 
