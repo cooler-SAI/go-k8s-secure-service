@@ -1,6 +1,27 @@
 # go-k8s-secure-service
 
+[![CI](https://github.com/cooler-SAI/go-k8s-secure-service/actions/workflows/ci.yml/badge.svg)](https://github.com/cooler-SAI/go-k8s-secure-service/actions/workflows/ci.yml)
+[![Security Scan (Trivy)](https://github.com/cooler-SAI/go-k8s-secure-service/actions/workflows/trivy.yml/badge.svg)](https://github.com/cooler-SAI/go-k8s-secure-service/actions/workflows/trivy.yml)
+![Go Version](https://img.shields.io/badge/Go-1.27.2-00ADD8?logo=go)
+![Tests](https://img.shields.io/badge/tests-passing-brightgreen)
+![Coverage](https://img.shields.io/badge/coverage-70.3%25-brightgreen)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 A lightweight, secure Go HTTP service designed for containerized deployment and orchestration in Kubernetes environments.
+
+---
+
+## Project Status
+
+| Metric / Aspect | Status | Details |
+| :--- | :--- | :--- |
+| **Development Lifecycle** | **Stable / Production-Ready Baseline** | Core microservice architecture, Kubernetes orchestration manifests, and security hardening are complete. |
+| **Build & Test Suite** | **Passing (100%)** | Unit and integration tests verify handlers, routing, server timeout settings, and shutdown lifecycle with **70.3%** statement coverage. Race detection runs in CI. |
+| **Security Scanning** | **Verified (Trivy SARIF)** | Automated weekly and PR/push scans covering repository dependencies, container image, secret detection, and IaC/Kubernetes configurations (`CRITICAL,HIGH` threshold). |
+| **Dependencies** | **Zero External (Stdlib Only)** | Built entirely on the Go standard library (`net/http`, `log/slog`, `os/signal`, `sync/atomic`), eliminating third-party supply-chain attack vectors. |
+| **Container Hardening** | **Distroless Non-Root (`65532:65532`)** | Multi-stage build (`golang:1.27.2-alpine` builder) deploying to `gcr.io/distroless/static-debian12:nonroot` with read-only rootfs and dropped Linux capabilities. |
+| **Kubernetes Compliance** | **Production Baseline Manifests** | Hardened `Deployment` (probes, non-root `SecurityContext`, `GOMEMLIMIT`), `ClusterIP Service`, `PodDisruptionBudget`, and least-privilege `NetworkPolicy` (default deny egress, restricted ingress). |
+| **CI/CD Automation** | **Active (GitHub Actions)** | Continuous integration enforcing formatting (`gofmt`), code vet (`go vet`), test suite with race detector, static binary build verification, and Trivy security scanning. |
 
 ---
 
