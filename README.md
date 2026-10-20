@@ -50,10 +50,13 @@ A lightweight, secure Go HTTP service designed for containerized deployment and 
 
 ```text
 go-k8s-secure-service/
+├── .github/
+│   └── dependabot.yml  # Weekly updates for Go modules, Actions and Docker images
 ├── .github/workflows/
 │   ├── ci.yml          # gofmt, vet, race-enabled tests, build, Kyverno policy tests, kind E2E
 │   ├── trivy.yml       # Trivy repo and container image scans, SBOM generation
 │   ├── scorecard.yml   # OpenSSF Scorecard supply-chain analysis
+│   ├── codeql.yml      # CodeQL static analysis (Go)
 │   └── release.yml     # Tag release: GHCR push, SBOMs, keyless Cosign signing
 ├── .idea/              # IDE configuration
 ├── e2e/
@@ -72,6 +75,7 @@ go-k8s-secure-service/
 ├── go.mod              # Go module definition and dependencies
 ├── go.sum              # Dependency checksums
 ├── LICENSE             # MIT License
+├── SECURITY.md         # Security policy and vulnerability reporting
 ├── main.go             # Application entry point, server configuration, and HTTP handlers
 ├── main_test.go        # Unit and integration test suite
 ├── trivy.yaml          # Shared Trivy scanner configuration
@@ -245,7 +249,9 @@ The manifests live in [`k8s/`](k8s/):
 - **Release**: pushing a `v*` tag runs `.github/workflows/release.yml`, which
   builds and pushes `ghcr.io/cooler-sai/go-k8s-secure-service:<tag>`, signs
   the image digest with Cosign keyless signing (Sigstore Fulcio + Rekor, no
-  long-lived keys), and attaches both SBOMs as signed attestations.
+  long-lived keys), and attaches both SBOMs as signed attestations. It also
+  publishes a GitHub Release containing the SBOMs and a Sigstore bundle
+  (`*.sigstore.json`) for each of them (`cosign verify-blob --bundle`).
 - **Verify a signature manually**:
   ```bash
   cosign verify ghcr.io/cooler-sai/go-k8s-secure-service:v1.0.0 \
@@ -299,6 +305,16 @@ kubectl apply -f k8s/
 - [x] **E2E Smoke Test (kind)**: GitHub Actions deploys the manifests to a single-node kind cluster under the `restricted` Pod Security profile and checks the endpoints through port-forward.
 - [x] **OpenSSF Scorecard**: Weekly and on-push Scorecard analysis (`.github/workflows/scorecard.yml`) with results published to the public badge and uploaded to GitHub Code Scanning.
 - [x] **Fuzz Testing**: Native Go fuzz test (`FuzzHandler`) for the HTTP router, run for 30 seconds on every CI run.
+- [x] **Dependency Updates**: Dependabot opens weekly PRs for Go modules, SHA-pinned GitHub Actions and digest-pinned Docker base images.
+- [x] **Static Analysis (CodeQL)**: CodeQL scans the Go code on every push and PR and weekly, reporting to GitHub Code Scanning.
+- [x] **Security Policy**: [`SECURITY.md`](SECURITY.md) with private vulnerability reporting.
+- [x] **Signed Releases**: GitHub Releases ship SBOMs with keyless Sigstore bundles.
+
+---
+
+### Security
+
+Found a vulnerability? Please follow [`SECURITY.md`](SECURITY.md) and report it privately instead of opening a public issue.
 
 ---
 
