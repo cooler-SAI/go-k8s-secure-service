@@ -1,0 +1,125 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: good
+  namespace: default
+spec:
+  containers:
+    - name: app
+      image: example.com/app:1.0.0
+      livenessProbe:
+        httpGet:
+          path: /livez
+          port: 8080
+      readinessProbe:
+        httpGet:
+          path: /readyz
+          port: 8080
+      resources:
+        limits:
+          cpu: 200m
+          memory: 64Mi
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: bad-root-container
+  namespace: default
+spec:
+  containers:
+    - name: app
+      image: example.com/app:1.0.0
+      securityContext:
+        runAsUser: 0
+      livenessProbe:
+        httpGet:
+          path: /livez
+          port: 8080
+      readinessProbe:
+        httpGet:
+          path: /readyz
+          port: 8080
+      resources:
+        limits:
+          cpu: 200m
+          memory: 64Mi
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: bad-root-pod
+  namespace: default
+spec:
+  securityContext:
+    runAsUser: 0
+  containers:
+    - name: app
+      image: example.com/app:1.0.0
+      livenessProbe:
+        httpGet:
+          path: /livez
+          port: 8080
+      readinessProbe:
+        httpGet:
+          path: /readyz
+          port: 8080
+      resources:
+        limits:
+          cpu: 200m
+          memory: 64Mi
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: bad-privileged
+  namespace: default
+spec:
+  containers:
+    - name: app
+      image: example.com/app:1.0.0
+      securityContext:
+        privileged: true
+      livenessProbe:
+        httpGet:
+          path: /livez
+          port: 8080
+      readinessProbe:
+        httpGet:
+          path: /readyz
+          port: 8080
+      resources:
+        limits:
+          cpu: 200m
+          memory: 64Mi
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: bad-no-probes
+  namespace: default
+spec:
+  containers:
+    - name: app
+      image: example.com/app:1.0.0
+      resources:
+        limits:
+          cpu: 200m
+          memory: 64Mi
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: bad-no-limits
+  namespace: default
+spec:
+  containers:
+    - name: app
+      image: example.com/app:1.0.0
+      livenessProbe:
+        httpGet:
+          path: /livez
+          port: 8080
+      readinessProbe:
+        httpGet:
+          path: /readyz
+          port: 8080

@@ -205,6 +205,13 @@ The manifests live in [`k8s/`](k8s/):
   your ingress controller or Gateway). All egress is denied, since the service
   makes no outbound calls. NetworkPolicy is enforced only if your CNI supports
   it (e.g. Calico, Cilium).
+- [`policies/`](k8s/policies/): Kyverno `ClusterPolicy` rules that deny
+  containers running as `runAsUser: 0`, deny privileged containers, and
+  require liveness/readiness probes and CPU/memory limits. System namespaces
+  are excluded. They are not applied by `kubectl apply -f k8s/`; install
+  Kyverno and apply them with `kubectl apply -f k8s/policies/*.yaml`. Policy
+  tests (`kyverno test k8s/policies/tests`) run offline against fixture pods
+  and `deployment.yaml`, and CI runs them on every push and PR.
 
 Make the `go-k8s-secure-service:v1.0.0` image available to your cluster nodes
 or update the manifest to use an image in your container registry, then apply
@@ -228,6 +235,7 @@ kubectl apply -f k8s/
 - [x] **Configurable Environment**: Support configuring the HTTP listen port via the standard `PORT` environment variable.
 - [x] **Containerization & Hardening**: Multi-stage distroless image, static binary, non-root runtime user, and hardened Kubernetes `SecurityContext` example.
 - [x] **Network Policy**: Least-privilege Kubernetes `NetworkPolicy`: ingress only on the HTTP port from the same namespace and the ingress controller, all egress denied.
+- [x] **Admission Policies (Kyverno)**: `ClusterPolicy` rules for non-root, non-privileged containers, mandatory probes and resource limits, validated offline in CI with `kyverno test`.
 
 ---
 

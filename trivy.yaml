@@ -10,6 +10,9 @@ severity:
   - CRITICAL
 
 scan:
+  # Kyverno test fixtures are deliberately insecure (root, privileged pods).
+  skip-dirs:
+    - k8s/policies/tests
   scanners:
     - vuln
     - misconfig

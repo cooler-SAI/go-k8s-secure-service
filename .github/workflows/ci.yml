@@ -44,3 +44,32 @@ jobs:
 
       - name: Build
         run: CGO_ENABLED=0 go build -trimpath -o /dev/null .
+
+  kyverno:
+    name: Kyverno Policy Tests
+    runs-on: ubuntu-latest
+    env:
+      KYVERNO_VERSION: v1.19.1
+      # SHA-256 of kyverno-cli_${KYVERNO_VERSION}_linux_x86_64.tar.gz, from the
+      # release's checksums.txt. Update both values together.
+      KYVERNO_CLI_SHA256: b38228f367fc0fdc2b08f4c83ea50ac5f16c60ff8d62d76a66157c33c47b70ae
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Kyverno CLI
+        run: |
+          archive="kyverno-cli_${KYVERNO_VERSION}_linux_x86_64.tar.gz"
+          curl -fsSL -o "$archive" \
+            "https://github.com/kyverno/kyverno/releases/download/${KYVERNO_VERSION}/${archive}"
+          echo "${KYVERNO_CLI_SHA256}  ${archive}" | sha256sum -c -
+          tar -xzf "$archive" kyverno
+          sudo install -m 0755 kyverno /usr/local/bin/kyverno
+          kyverno version
+
+      # Offline validation: the policies are applied to fixture resources and
+      # to k8s/deployment.yaml, no cluster required.
+      - name: Run Kyverno policy tests
+        run: kyverno test k8s/policies/tests

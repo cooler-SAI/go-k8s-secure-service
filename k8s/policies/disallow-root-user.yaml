@@ -1,0 +1,68 @@
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: disallow-root-user
+  annotations:
+    policies.kyverno.io/title: Disallow Root User
+    policies.kyverno.io/category: Pod Security
+    policies.kyverno.io/severity: high
+    policies.kyverno.io/description: >-
+      Containers must not run as UID 0. The check applies to the pod-level
+      and container-level securityContext.runAsUser fields of containers,
+      init containers and ephemeral containers. Pod controllers (Deployment,
+      StatefulSet, ...) are covered by the rules Kyverno auto-generates.
+spec:
+  validationFailureAction: Enforce
+  background: true
+  rules:
+    - name: check-pod-run-as-user
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+      exclude:
+        any:
+          - resources:
+              namespaces:
+                - kube-system
+                - kube-public
+                - kube-node-lease
+                - kyverno
+      validate:
+        message: >-
+          Running as root (runAsUser: 0) is not allowed. Set
+          spec.securityContext.runAsUser to a non-zero UID.
+        pattern:
+          spec:
+            =(securityContext):
+              =(runAsUser): ">0"
+    - name: check-container-run-as-user
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+      exclude:
+        any:
+          - resources:
+              namespaces:
+                - kube-system
+                - kube-public
+                - kube-node-lease
+                - kyverno
+      validate:
+        message: >-
+          Running as root (runAsUser: 0) is not allowed. Set
+          securityContext.runAsUser to a non-zero UID on every container.
+        pattern:
+          spec:
+            =(ephemeralContainers):
+              - =(securityContext):
+                  =(runAsUser): ">0"
+            =(initContainers):
+              - =(securityContext):
+                  =(runAsUser): ">0"
+            containers:
+              - =(securityContext):
+                  =(runAsUser): ">0"
