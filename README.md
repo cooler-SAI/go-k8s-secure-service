@@ -5,6 +5,7 @@
 ![Go Version](https://img.shields.io/badge/Go-1.27.2-00ADD8?logo=go)
 ![Tests](https://img.shields.io/badge/tests-passing-brightgreen)
 ![Coverage](https://img.shields.io/badge/coverage-70.3%25-brightgreen)
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/cooler-SAI/go-k8s-secure-service/badge)](https://scorecard.dev/viewer/?uri=github.com/cooler-SAI/go-k8s-secure-service)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 A lightweight, secure Go HTTP service designed for containerized deployment and orchestration in Kubernetes environments.
@@ -52,6 +53,7 @@ go-k8s-secure-service/
 ├── .github/workflows/
 │   ├── ci.yml          # gofmt, vet, race-enabled tests, build, Kyverno policy tests, kind E2E
 │   ├── trivy.yml       # Trivy repo and container image scans, SBOM generation
+│   ├── scorecard.yml   # OpenSSF Scorecard supply-chain analysis
 │   └── release.yml     # Tag release: GHCR push, SBOMs, keyless Cosign signing
 ├── .idea/              # IDE configuration
 ├── e2e/
@@ -285,6 +287,7 @@ kubectl apply -f k8s/
 - [x] **Admission Policies (Kyverno)**: `ClusterPolicy` rules for non-root, non-privileged containers, mandatory probes and resource limits, validated offline in CI with `kyverno test`.
 - [x] **SBOM & Image Signing (Cosign)**: Trivy-generated SPDX/CycloneDX SBOMs in CI, keyless Cosign signing and SBOM attestations on release, and a Kyverno policy that verifies the signature at admission.
 - [x] **E2E Smoke Test (kind)**: GitHub Actions deploys the manifests to a single-node kind cluster under the `restricted` Pod Security profile and checks the endpoints through port-forward.
+- [x] **OpenSSF Scorecard**: Weekly and on-push Scorecard analysis (`.github/workflows/scorecard.yml`) with results published to the public badge and uploaded to GitHub Code Scanning.
 
 ---
 
