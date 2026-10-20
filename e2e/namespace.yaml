@@ -1,0 +1,11 @@
+# Namespace enforcing the Pod Security Standards "restricted" profile.
+# The Deployment must be admitted here without any exemptions.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: e2e
+  labels:
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/audit: restricted

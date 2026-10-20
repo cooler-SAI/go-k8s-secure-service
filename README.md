@@ -236,6 +236,23 @@ The manifests live in [`k8s/`](k8s/):
 - **Cluster enforcement**: the `verify-image-signature` Kyverno policy applies
   the same identity check at admission time.
 
+### End-to-End Smoke Test
+
+[`e2e/smoke.sh`](e2e/smoke.sh) deploys the manifests into a namespace that
+enforces the Pod Security `restricted` profile
+([`e2e/namespace.yaml`](e2e/namespace.yaml)), waits for both pods to become
+Ready, and calls `/`, `/livez`, `/readyz`, an unknown path (404) and a `POST`
+(405) through `kubectl port-forward`. CI runs it on a single-node
+[kind](https://kind.sigs.k8s.io/) cluster on every push and PR. To run it
+locally:
+
+```bash
+docker build -t go-k8s-secure-service:v1.0.0 .
+kind create cluster --name e2e
+kind load docker-image go-k8s-secure-service:v1.0.0 --name e2e
+./e2e/smoke.sh
+```
+
 Make the `go-k8s-secure-service:v1.0.0` image available to your cluster nodes
 or update the manifest to use an image in your container registry, then apply
 everything:
@@ -260,6 +277,7 @@ kubectl apply -f k8s/
 - [x] **Network Policy**: Least-privilege Kubernetes `NetworkPolicy`: ingress only on the HTTP port from the same namespace and the ingress controller, all egress denied.
 - [x] **Admission Policies (Kyverno)**: `ClusterPolicy` rules for non-root, non-privileged containers, mandatory probes and resource limits, validated offline in CI with `kyverno test`.
 - [x] **SBOM & Image Signing (Cosign)**: Trivy-generated SPDX/CycloneDX SBOMs in CI, keyless Cosign signing and SBOM attestations on release, and a Kyverno policy that verifies the signature at admission.
+- [x] **E2E Smoke Test (kind)**: GitHub Actions deploys the manifests to a single-node kind cluster under the `restricted` Pod Security profile and checks the endpoints through port-forward.
 
 ---
 
