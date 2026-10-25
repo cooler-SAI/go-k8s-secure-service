@@ -31,7 +31,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 # Distroless static base: only the binary, CA certificates, and tzdata.
 # Contains no shell, package managers, or standard system utilities, minimizing attack surface.
 # =========================================================
-FROM gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab
+FROM gcr.io/distroless/static-debian13:nonroot@sha256:18f4cc26c9ffa7f20a359298be7deadac5c607c8e03a02b8119f1a5fc2f82c99
 
 COPY --from=builder --chown=65532:65532 /out/server /server
 
