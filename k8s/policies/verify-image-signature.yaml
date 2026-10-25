@@ -1,5 +1,5 @@
-apiVersion: kyverno.io/v1
-kind: ClusterPolicy
+apiVersion: policies.kyverno.io/v1
+kind: ImageValidatingPolicy
 metadata:
   name: verify-image-signature
   annotations:
@@ -13,31 +13,39 @@ metadata:
       verified against Sigstore's Fulcio identity and the Rekor transparency
       log, and the image reference is rewritten to its verified digest.
 spec:
-  validationFailureAction: Enforce
-  webhookTimeoutSeconds: 30
-  rules:
-    - name: verify-cosign-keyless-signature
-      match:
-        any:
-          - resources:
-              kinds:
-                - Pod
-      verifyImages:
-        # Cosign v3 (used by release.yml) stores signatures as Sigstore
-        # bundles attached via OCI referrers, not as legacy
-        # sha256-<digest>.sig tags. The default "Cosign" type only looks for
-        # the legacy tags and rejects every release with "no signatures found".
-        - type: SigstoreBundle
-          imageReferences:
-            - "ghcr.io/cooler-sai/go-k8s-secure-service*"
-          failureAction: Enforce
-          mutateDigest: true
-          verifyDigest: true
-          required: true
-          attestors:
-            - entries:
-                - keyless:
-                    issuer: "https://token.actions.githubusercontent.com"
-                    subjectRegExp: '^https://github\.com/cooler-SAI/go-k8s-secure-service/\.github/workflows/release\.yml@refs/tags/v.*$'
-                    rekor:
-                      url: "https://rekor.sigstore.dev"
+  validationActions:
+    - Deny
+  webhookConfiguration:
+    timeoutSeconds: 30
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["pods"]
+  autogen:
+    podControllers:
+      controllers: [deployments, statefulsets, daemonsets, replicasets, jobs, cronjobs]
+  # Only these images are verified; other images are not checked.
+  matchImageReferences:
+    - glob: "ghcr.io/cooler-sai/go-k8s-secure-service*"
+  validationConfigurations:
+    mutateDigest: true
+    verifyDigest: true
+    required: true
+  attestors:
+    - name: release
+      cosign:
+        keyless:
+          identities:
+            - issuer: "https://token.actions.githubusercontent.com"
+              subjectRegExp: '^https://github\.com/cooler-SAI/go-k8s-secure-service/\.github/workflows/release\.yml@refs/tags/v.*$'
+        ctlog:
+          url: "https://rekor.sigstore.dev"
+  validations:
+    - expression: >-
+        images.containers.map(image,
+          verifyImageSignatures(image, [attestors.release])).all(e, e > 0)
+      message: >-
+        Images from ghcr.io/cooler-sai/go-k8s-secure-service must be signed by
+        this repository's release workflow.

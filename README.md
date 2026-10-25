@@ -23,7 +23,7 @@ A lightweight, secure Go HTTP service designed for containerized deployment and 
 | **Security Scanning** | **Verified (Trivy SARIF)** | Automated weekly and PR/push scans (Trivy, plus CodeQL static analysis of the Go code) covering repository dependencies, container image, secret detection, and IaC/Kubernetes configurations (`CRITICAL,HIGH` threshold). |
 | **Dependencies** | **Minimal (one direct)** | Built on the Go standard library (`net/http`, `os/signal`, `sync/atomic`) plus a single direct dependency, [`zerolog`](https://github.com/rs/zerolog), for structured logging. Dependencies are scanned by Trivy. |
 | **Container Hardening** | **Distroless Non-Root (`65532:65532`)** | Multi-stage build (`golang:1.27.3-alpine` builder) deploying to `gcr.io/distroless/static-debian12:nonroot` with read-only rootfs and dropped Linux capabilities. |
-| **Kubernetes Compliance** | **Production Baseline Manifests** | Hardened `Deployment` (probes, non-root `SecurityContext`, `GOMEMLIMIT`), `ClusterIP Service`, `PodDisruptionBudget`, least-privilege `NetworkPolicy` (default deny egress, restricted ingress), and Kyverno `ClusterPolicy` rules (non-root, non-privileged, probes, resource limits). |
+| **Kubernetes Compliance** | **Production Baseline Manifests** | Hardened `Deployment` (probes, non-root `SecurityContext`, `GOMEMLIMIT`), `ClusterIP Service`, `PodDisruptionBudget`, least-privilege `NetworkPolicy` (default deny egress, restricted ingress), and CEL-based Kyverno `ValidatingPolicy`/`ImageValidatingPolicy` rules (non-root, non-privileged, probes, resource limits, image signature). |
 | **CI/CD Automation** | **Active (GitHub Actions)** | Continuous integration enforcing formatting (`gofmt`), code vet (`go vet`), test suite with race detector, static binary build verification, offline Kyverno policy tests, a kind E2E smoke test under the `restricted` Pod Security profile with Kyverno enforcing (including live Cosign signature verification), and Trivy security scanning. |
 | **Supply Chain** | **SBOM + Signed Releases** | Trivy-generated SPDX/CycloneDX SBOMs, and tagged releases pushed to GHCR with keyless Cosign signatures and SBOM attestations, verified at admission by Kyverno. |
 
@@ -295,14 +295,17 @@ The manifests live in [`k8s/`](k8s/):
   your ingress controller or Gateway). All egress is denied, since the service
   makes no outbound calls. NetworkPolicy is enforced only if your CNI supports
   it (e.g. Calico, Cilium).
-- [`policies/`](k8s/policies/): Kyverno `ClusterPolicy` rules that deny
-  containers running as `runAsUser: 0`, deny privileged containers, and
-  require liveness/readiness probes and CPU/memory limits. System namespaces
-  are excluded. They are not applied by `kubectl apply -f k8s/`; install
+- [`policies/`](k8s/policies/): CEL-based Kyverno policies
+  (`policies.kyverno.io/v1`, Kyverno 1.19+). Four `ValidatingPolicy`
+  resources deny containers running as `runAsUser: 0`, deny privileged
+  containers, and require liveness/readiness probes and CPU/memory limits.
+  Kyverno auto-generates the same checks for Deployments, StatefulSets,
+  DaemonSets, ReplicaSets, Jobs and CronJobs. System namespaces are
+  excluded. They are not applied by `kubectl apply -f k8s/`; install
   Kyverno and apply them with `kubectl apply -f k8s/policies/`. Policy
   tests (`kyverno test k8s/policies/tests`) run offline against fixture pods
   and `deployment.yaml`, and CI runs them on every push and PR.
-  `verify-image-signature.yaml` additionally requires images from
+  `verify-image-signature.yaml`, an `ImageValidatingPolicy`, additionally requires images from
   `ghcr.io/cooler-sai/go-k8s-secure-service` to carry a Cosign keyless
   signature from the release workflow (see below); it only matches that
   registry path, so locally built images are unaffected.
@@ -359,7 +362,8 @@ kind load docker-image go-k8s-secure-service:v1.0.0 --name e2e
 helm install kyverno kyverno --repo https://kyverno.github.io/kyverno/ \
   --version 3.9.1 --namespace kyverno --create-namespace --wait
 kubectl apply -f k8s/policies/   # rerun if Kyverno's webhook isn't accepting connections yet
-kubectl wait --for=condition=Ready clusterpolicy --all --timeout=120s
+kubectl wait --for=jsonpath='{.status.conditionStatus.ready}'=true \
+  validatingpolicy,imagevalidatingpolicy --all --timeout=120s
 ./e2e/smoke.sh
 ./e2e/admission.sh
 ```
@@ -446,7 +450,7 @@ git push origin v1.0.1
 - [x] **Configurable Environment**: Support configuring the HTTP listen port via the standard `PORT` environment variable.
 - [x] **Containerization & Hardening**: Multi-stage distroless image, static binary, non-root runtime user, and hardened Kubernetes `SecurityContext` example.
 - [x] **Network Policy**: Least-privilege Kubernetes `NetworkPolicy`: ingress only on the HTTP port from the same namespace and the ingress controller, all egress denied.
-- [x] **Admission Policies (Kyverno)**: `ClusterPolicy` rules for non-root, non-privileged containers, mandatory probes and resource limits, validated offline in CI with `kyverno test`.
+- [x] **Admission Policies (Kyverno)**: CEL-based `ValidatingPolicy` rules (`policies.kyverno.io/v1`) for non-root, non-privileged containers, mandatory probes and resource limits, validated offline in CI with `kyverno test`.
 - [x] **SBOM & Image Signing (Cosign)**: Trivy-generated SPDX/CycloneDX SBOMs in CI, keyless Cosign signing and SBOM attestations on release, and a Kyverno policy that verifies the signature at admission.
 - [x] **E2E Smoke Test (kind)**: GitHub Actions deploys the manifests to a single-node kind cluster under the `restricted` Pod Security profile and checks the endpoints through port-forward, with Kyverno installed and a live admission test that verifies a signed release image.
 - [x] **OpenSSF Scorecard**: Weekly and on-push Scorecard analysis (`.github/workflows/scorecard.yml`) with results published to the public badge and uploaded to GitHub Code Scanning.

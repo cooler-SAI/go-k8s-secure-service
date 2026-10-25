@@ -1,5 +1,5 @@
-apiVersion: kyverno.io/v1
-kind: ClusterPolicy
+apiVersion: policies.kyverno.io/v1
+kind: ValidatingPolicy
 metadata:
   name: disallow-privileged-containers
   annotations:
@@ -11,35 +11,37 @@ metadata:
       to all host devices. securityContext.privileged must be unset or false
       for containers, init containers and ephemeral containers.
 spec:
-  validationFailureAction: Enforce
-  background: true
-  rules:
-    - name: check-privileged
-      match:
-        any:
-          - resources:
-              kinds:
-                - Pod
-      exclude:
-        any:
-          - resources:
-              namespaces:
-                - kube-system
-                - kube-public
-                - kube-node-lease
-                - kyverno
-      validate:
-        message: >-
-          Privileged containers are not allowed. securityContext.privileged
-          must be unset or false.
-        pattern:
-          spec:
-            =(ephemeralContainers):
-              - =(securityContext):
-                  =(privileged): "false"
-            =(initContainers):
-              - =(securityContext):
-                  =(privileged): "false"
-            containers:
-              - =(securityContext):
-                  =(privileged): "false"
+  validationActions:
+    - Deny
+  evaluation:
+    background:
+      enabled: true
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["pods"]
+    namespaceSelector:
+      matchExpressions:
+        - key: kubernetes.io/metadata.name
+          operator: NotIn
+          values: [kube-system, kube-public, kube-node-lease, kyverno]
+  # Kyverno generates equivalent checks for these pod controllers, rewriting
+  # object.spec to the pod template.
+  autogen:
+    podControllers:
+      controllers: [deployments, statefulsets, daemonsets, replicasets, jobs, cronjobs]
+  variables:
+    - name: allContainers
+      expression: >-
+        object.spec.containers
+        + object.spec.?initContainers.orValue([])
+        + object.spec.?ephemeralContainers.orValue([])
+  validations:
+    - expression: >-
+        variables.allContainers.all(c,
+          !c.?securityContext.?privileged.orValue(false))
+      message: >-
+        Privileged containers are not allowed. securityContext.privileged
+        must be unset or false.

@@ -24,7 +24,8 @@ cleanup() {
 trap cleanup EXIT
 
 wait_policy() {
-  kubectl wait --for=condition=Ready clusterpolicy/verify-image-signature --timeout=60s >/dev/null
+  kubectl wait --for=jsonpath='{.status.conditionStatus.ready}'=true \
+    imagevalidatingpolicy/verify-image-signature --timeout=60s >/dev/null
 }
 
 dry_run() { # dry_run <file>: prints the API server's answer, fails if denied
