@@ -10,256 +10,67 @@ policies:
 resources:
   - resources.yaml
   - ../../deployment.yaml
+# ValidatingPolicies report one result per policy (not per rule). The
+# Deployment is checked through the pod-controller variants Kyverno
+# auto-generates.
 results:
-    - policy: disallow-root-user
-      rule: check-container-run-as-user
-      resources:
-        - good
-      kind: Pod
-      result: pass
-    - policy: disallow-root-user
-      rule: check-pod-run-as-user
-      resources:
-        - good
-      kind: Pod
-      result: pass
-    - policy: disallow-privileged-containers
-      rule: check-privileged
-      resources:
-        - good
-      kind: Pod
-      result: pass
-    - policy: require-probes
-      rule: require-liveness-probe
-      resources:
-        - good
-      kind: Pod
-      result: pass
-    - policy: require-probes
-      rule: require-readiness-probe
-      resources:
-        - good
-      kind: Pod
-      result: pass
-    - policy: require-resource-limits
-      rule: require-cpu-memory-limits
-      resources:
-        - good
-      kind: Pod
-      result: pass
-    - policy: disallow-root-user
-      rule: check-container-run-as-user
-      resources:
-        - bad-root-container
-      kind: Pod
-      result: fail
-    - policy: disallow-root-user
-      rule: check-pod-run-as-user
-      resources:
-        - bad-root-container
-      kind: Pod
-      result: pass
-    - policy: disallow-privileged-containers
-      rule: check-privileged
-      resources:
-        - bad-root-container
-      kind: Pod
-      result: pass
-    - policy: require-probes
-      rule: require-liveness-probe
-      resources:
-        - bad-root-container
-      kind: Pod
-      result: pass
-    - policy: require-probes
-      rule: require-readiness-probe
-      resources:
-        - bad-root-container
-      kind: Pod
-      result: pass
-    - policy: require-resource-limits
-      rule: require-cpu-memory-limits
-      resources:
-        - bad-root-container
-      kind: Pod
-      result: pass
-    - policy: disallow-root-user
-      rule: check-container-run-as-user
-      resources:
-        - bad-root-pod
-      kind: Pod
-      result: pass
-    - policy: disallow-root-user
-      rule: check-pod-run-as-user
-      resources:
-        - bad-root-pod
-      kind: Pod
-      result: fail
-    - policy: disallow-privileged-containers
-      rule: check-privileged
-      resources:
-        - bad-root-pod
-      kind: Pod
-      result: pass
-    - policy: require-probes
-      rule: require-liveness-probe
-      resources:
-        - bad-root-pod
-      kind: Pod
-      result: pass
-    - policy: require-probes
-      rule: require-readiness-probe
-      resources:
-        - bad-root-pod
-      kind: Pod
-      result: pass
-    - policy: require-resource-limits
-      rule: require-cpu-memory-limits
-      resources:
-        - bad-root-pod
-      kind: Pod
-      result: pass
-    - policy: disallow-root-user
-      rule: check-container-run-as-user
-      resources:
-        - bad-privileged
-      kind: Pod
-      result: pass
-    - policy: disallow-root-user
-      rule: check-pod-run-as-user
-      resources:
-        - bad-privileged
-      kind: Pod
-      result: pass
-    - policy: disallow-privileged-containers
-      rule: check-privileged
-      resources:
-        - bad-privileged
-      kind: Pod
-      result: fail
-    - policy: require-probes
-      rule: require-liveness-probe
-      resources:
-        - bad-privileged
-      kind: Pod
-      result: pass
-    - policy: require-probes
-      rule: require-readiness-probe
-      resources:
-        - bad-privileged
-      kind: Pod
-      result: pass
-    - policy: require-resource-limits
-      rule: require-cpu-memory-limits
-      resources:
-        - bad-privileged
-      kind: Pod
-      result: pass
-    - policy: disallow-root-user
-      rule: check-container-run-as-user
-      resources:
-        - bad-no-probes
-      kind: Pod
-      result: pass
-    - policy: disallow-root-user
-      rule: check-pod-run-as-user
-      resources:
-        - bad-no-probes
-      kind: Pod
-      result: pass
-    - policy: disallow-privileged-containers
-      rule: check-privileged
-      resources:
-        - bad-no-probes
-      kind: Pod
-      result: pass
-    - policy: require-probes
-      rule: require-liveness-probe
-      resources:
-        - bad-no-probes
-      kind: Pod
-      result: fail
-    - policy: require-probes
-      rule: require-readiness-probe
-      resources:
-        - bad-no-probes
-      kind: Pod
-      result: fail
-    - policy: require-resource-limits
-      rule: require-cpu-memory-limits
-      resources:
-        - bad-no-probes
-      kind: Pod
-      result: pass
-    - policy: disallow-root-user
-      rule: check-container-run-as-user
-      resources:
-        - bad-no-limits
-      kind: Pod
-      result: pass
-    - policy: disallow-root-user
-      rule: check-pod-run-as-user
-      resources:
-        - bad-no-limits
-      kind: Pod
-      result: pass
-    - policy: disallow-privileged-containers
-      rule: check-privileged
-      resources:
-        - bad-no-limits
-      kind: Pod
-      result: pass
-    - policy: require-probes
-      rule: require-liveness-probe
-      resources:
-        - bad-no-limits
-      kind: Pod
-      result: pass
-    - policy: require-probes
-      rule: require-readiness-probe
-      resources:
-        - bad-no-limits
-      kind: Pod
-      result: pass
-    - policy: require-resource-limits
-      rule: require-cpu-memory-limits
-      resources:
-        - bad-no-limits
-      kind: Pod
-      result: fail
-    - policy: disallow-root-user
-      rule: autogen-check-container-run-as-user
-      resources:
-        - go-k8s-secure-service
-      kind: Deployment
-      result: pass
-    - policy: disallow-root-user
-      rule: autogen-check-pod-run-as-user
-      resources:
-        - go-k8s-secure-service
-      kind: Deployment
-      result: pass
-    - policy: disallow-privileged-containers
-      rule: autogen-check-privileged
-      resources:
-        - go-k8s-secure-service
-      kind: Deployment
-      result: pass
-    - policy: require-probes
-      rule: autogen-require-liveness-probe
-      resources:
-        - go-k8s-secure-service
-      kind: Deployment
-      result: pass
-    - policy: require-probes
-      rule: autogen-require-readiness-probe
-      resources:
-        - go-k8s-secure-service
-      kind: Deployment
-      result: pass
-    - policy: require-resource-limits
-      rule: autogen-require-cpu-memory-limits
-      resources:
-        - go-k8s-secure-service
-      kind: Deployment
-      result: pass
+  - policy: disallow-root-user
+    isValidatingPolicy: true
+    kind: Pod
+    resources: [good, bad-privileged, bad-no-probes, bad-no-limits]
+    result: pass
+  - policy: disallow-root-user
+    isValidatingPolicy: true
+    kind: Pod
+    resources: [bad-root-container, bad-root-pod]
+    result: fail
+  - policy: disallow-privileged-containers
+    isValidatingPolicy: true
+    kind: Pod
+    resources: [good, bad-root-container, bad-root-pod, bad-no-probes, bad-no-limits]
+    result: pass
+  - policy: disallow-privileged-containers
+    isValidatingPolicy: true
+    kind: Pod
+    resources: [bad-privileged]
+    result: fail
+  - policy: require-probes
+    isValidatingPolicy: true
+    kind: Pod
+    resources: [good, bad-root-container, bad-root-pod, bad-privileged, bad-no-limits]
+    result: pass
+  - policy: require-probes
+    isValidatingPolicy: true
+    kind: Pod
+    resources: [bad-no-probes]
+    result: fail
+  - policy: require-resource-limits
+    isValidatingPolicy: true
+    kind: Pod
+    resources: [good, bad-root-container, bad-root-pod, bad-privileged, bad-no-probes]
+    result: pass
+  - policy: require-resource-limits
+    isValidatingPolicy: true
+    kind: Pod
+    resources: [bad-no-limits]
+    result: fail
+  - policy: disallow-root-user
+    isValidatingPolicy: true
+    kind: Deployment
+    resources: [go-k8s-secure-service]
+    result: pass
+  - policy: disallow-privileged-containers
+    isValidatingPolicy: true
+    kind: Deployment
+    resources: [go-k8s-secure-service]
+    result: pass
+  - policy: require-probes
+    isValidatingPolicy: true
+    kind: Deployment
+    resources: [go-k8s-secure-service]
+    result: pass
+  - policy: require-resource-limits
+    isValidatingPolicy: true
+    kind: Deployment
+    resources: [go-k8s-secure-service]
+    result: pass

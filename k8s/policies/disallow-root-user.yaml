@@ -1,5 +1,5 @@
-apiVersion: kyverno.io/v1
-kind: ClusterPolicy
+apiVersion: policies.kyverno.io/v1
+kind: ValidatingPolicy
 metadata:
   name: disallow-root-user
   annotations:
@@ -10,59 +10,44 @@ metadata:
       Containers must not run as UID 0. The check applies to the pod-level
       and container-level securityContext.runAsUser fields of containers,
       init containers and ephemeral containers. Pod controllers (Deployment,
-      StatefulSet, ...) are covered by the rules Kyverno auto-generates.
+      StatefulSet, ...) are covered by the checks Kyverno auto-generates.
 spec:
-  validationFailureAction: Enforce
-  background: true
-  rules:
-    - name: check-pod-run-as-user
-      match:
-        any:
-          - resources:
-              kinds:
-                - Pod
-      exclude:
-        any:
-          - resources:
-              namespaces:
-                - kube-system
-                - kube-public
-                - kube-node-lease
-                - kyverno
-      validate:
-        message: >-
-          Running as root (runAsUser: 0) is not allowed. Set
-          spec.securityContext.runAsUser to a non-zero UID.
-        pattern:
-          spec:
-            =(securityContext):
-              =(runAsUser): ">0"
-    - name: check-container-run-as-user
-      match:
-        any:
-          - resources:
-              kinds:
-                - Pod
-      exclude:
-        any:
-          - resources:
-              namespaces:
-                - kube-system
-                - kube-public
-                - kube-node-lease
-                - kyverno
-      validate:
-        message: >-
-          Running as root (runAsUser: 0) is not allowed. Set
-          securityContext.runAsUser to a non-zero UID on every container.
-        pattern:
-          spec:
-            =(ephemeralContainers):
-              - =(securityContext):
-                  =(runAsUser): ">0"
-            =(initContainers):
-              - =(securityContext):
-                  =(runAsUser): ">0"
-            containers:
-              - =(securityContext):
-                  =(runAsUser): ">0"
+  validationActions:
+    - Deny
+  evaluation:
+    background:
+      enabled: true
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["pods"]
+    namespaceSelector:
+      matchExpressions:
+        - key: kubernetes.io/metadata.name
+          operator: NotIn
+          values: [kube-system, kube-public, kube-node-lease, kyverno]
+  autogen:
+    podControllers:
+      controllers: [deployments, statefulsets, daemonsets, replicasets, jobs, cronjobs]
+  variables:
+    - name: allContainers
+      expression: >-
+        object.spec.containers
+        + object.spec.?initContainers.orValue([])
+        + object.spec.?ephemeralContainers.orValue([])
+  # runAsUser may be left unset (the image's user applies); if it is set, it
+  # must not be 0.
+  validations:
+    - expression: >-
+        object.spec.?securityContext.?runAsUser.orValue(1) > 0
+      message: >-
+        Running as root (runAsUser: 0) is not allowed. Set
+        spec.securityContext.runAsUser to a non-zero UID.
+    - expression: >-
+        variables.allContainers.all(c,
+          c.?securityContext.?runAsUser.orValue(1) > 0)
+      message: >-
+        Running as root (runAsUser: 0) is not allowed. Set
+        securityContext.runAsUser to a non-zero UID on every container.

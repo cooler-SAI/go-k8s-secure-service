@@ -1,5 +1,5 @@
-apiVersion: kyverno.io/v1
-kind: ClusterPolicy
+apiVersion: policies.kyverno.io/v1
+kind: ValidatingPolicy
 metadata:
   name: require-probes
   annotations:
@@ -11,54 +11,27 @@ metadata:
       kubelet can restart hung containers and Services only route traffic to
       ready pods. Init and ephemeral containers are not checked.
 spec:
-  validationFailureAction: Enforce
-  background: true
-  rules:
-    - name: require-liveness-probe
-      match:
-        any:
-          - resources:
-              kinds:
-                - Pod
-      exclude:
-        any:
-          - resources:
-              namespaces:
-                - kube-system
-                - kube-public
-                - kube-node-lease
-                - kyverno
-      validate:
-        message: Every container must define a livenessProbe.
-        foreach:
-          - list: request.object.spec.containers
-            deny:
-              conditions:
-                any:
-                  - key: "{{ element.livenessProbe || '' }}"
-                    operator: Equals
-                    value: ""
-    - name: require-readiness-probe
-      match:
-        any:
-          - resources:
-              kinds:
-                - Pod
-      exclude:
-        any:
-          - resources:
-              namespaces:
-                - kube-system
-                - kube-public
-                - kube-node-lease
-                - kyverno
-      validate:
-        message: Every container must define a readinessProbe.
-        foreach:
-          - list: request.object.spec.containers
-            deny:
-              conditions:
-                any:
-                  - key: "{{ element.readinessProbe || '' }}"
-                    operator: Equals
-                    value: ""
+  validationActions:
+    - Deny
+  evaluation:
+    background:
+      enabled: true
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["pods"]
+    namespaceSelector:
+      matchExpressions:
+        - key: kubernetes.io/metadata.name
+          operator: NotIn
+          values: [kube-system, kube-public, kube-node-lease, kyverno]
+  autogen:
+    podControllers:
+      controllers: [deployments, statefulsets, daemonsets, replicasets, jobs, cronjobs]
+  validations:
+    - expression: object.spec.containers.all(c, has(c.livenessProbe))
+      message: Every container must define a livenessProbe.
+    - expression: object.spec.containers.all(c, has(c.readinessProbe))
+      message: Every container must define a readinessProbe.

@@ -125,7 +125,8 @@ jobs:
             echo "Kyverno webhook not ready yet (attempt ${attempt}), retrying in 5s"
             sleep 5
           done
-          kubectl wait --for=condition=Ready clusterpolicy --all --timeout=120s
+          kubectl wait --for=jsonpath='{.status.conditionStatus.ready}'=true \
+            validatingpolicy,imagevalidatingpolicy --all --timeout=120s
 
       # Deploys into a namespace enforcing pod-security.kubernetes.io/enforce:
       # restricted, waits for the pods and calls the endpoints via port-forward.
