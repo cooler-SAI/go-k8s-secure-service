@@ -83,6 +83,10 @@ jobs:
     name: E2E Smoke Test (kind)
     runs-on: ubuntu-latest
     needs: test
+    env:
+      # Helm chart 3.9.1 ships Kyverno v1.19.1; keep it in sync with
+      # KYVERNO_VERSION in the kyverno job.
+      KYVERNO_CHART_VERSION: 3.9.1
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -100,7 +104,25 @@ jobs:
       - name: Load image into kind
         run: kind load docker-image go-k8s-secure-service:v1.0.0 --name e2e
 
+      # Installed before the smoke test so the real Deployment is admitted
+      # under the policies as well.
+      - name: Install Kyverno and policies
+        run: |
+          helm install kyverno kyverno \
+            --repo https://kyverno.github.io/kyverno/ \
+            --version "${KYVERNO_CHART_VERSION}" \
+            --namespace kyverno --create-namespace \
+            --wait --timeout 5m
+          kubectl apply -f k8s/policies/
+          kubectl wait --for=condition=Ready clusterpolicy --all --timeout=120s
+
       # Deploys into a namespace enforcing pod-security.kubernetes.io/enforce:
       # restricted, waits for the pods and calls the endpoints via port-forward.
       - name: Run smoke test
         run: ./e2e/smoke.sh
+
+      # Live admission checks, including Cosign signature verification of a
+      # signed release image against Sigstore, which `kyverno test` cannot do
+      # offline.
+      - name: Run admission test
+        run: ./e2e/admission.sh
