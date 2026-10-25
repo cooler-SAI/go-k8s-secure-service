@@ -358,7 +358,7 @@ kind create cluster --name e2e
 kind load docker-image go-k8s-secure-service:v1.0.0 --name e2e
 helm install kyverno kyverno --repo https://kyverno.github.io/kyverno/ \
   --version 3.9.1 --namespace kyverno --create-namespace --wait
-kubectl apply -f k8s/policies/
+kubectl apply -f k8s/policies/   # rerun if Kyverno's webhook isn't accepting connections yet
 kubectl wait --for=condition=Ready clusterpolicy --all --timeout=120s
 ./e2e/smoke.sh
 ./e2e/admission.sh
