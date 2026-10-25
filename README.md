@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/cooler-SAI/go-k8s-secure-service/actions/workflows/ci.yml/badge.svg)](https://github.com/cooler-SAI/go-k8s-secure-service/actions/workflows/ci.yml)
 [![Security Scan (Trivy)](https://github.com/cooler-SAI/go-k8s-secure-service/actions/workflows/trivy.yml/badge.svg)](https://github.com/cooler-SAI/go-k8s-secure-service/actions/workflows/trivy.yml)
-![Go Version](https://img.shields.io/badge/Go-1.27.2-00ADD8?logo=go)
+![Go Version](https://img.shields.io/badge/Go-1.27.3-00ADD8?logo=go)
 ![Tests](https://img.shields.io/badge/tests-passing-brightgreen)
 ![Coverage](https://img.shields.io/badge/coverage-67.2%25-brightgreen)
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/cooler-SAI/go-k8s-secure-service/badge)](https://scorecard.dev/viewer/?uri=github.com/cooler-SAI/go-k8s-secure-service)
@@ -20,7 +20,7 @@ A lightweight, secure Go HTTP service designed for containerized deployment and 
 | **Build & Test Suite** | **Passing (100%)** | Unit and integration tests verify handlers, routing, server timeout settings, and shutdown lifecycle with **67.2%** statement coverage. Race detection runs in CI. |
 | **Security Scanning** | **Verified (Trivy SARIF)** | Automated weekly and PR/push scans (Trivy, plus CodeQL static analysis of the Go code) covering repository dependencies, container image, secret detection, and IaC/Kubernetes configurations (`CRITICAL,HIGH` threshold). |
 | **Dependencies** | **Minimal (one direct)** | Built on the Go standard library (`net/http`, `os/signal`, `sync/atomic`) plus a single direct dependency, [`zerolog`](https://github.com/rs/zerolog), for structured logging. Dependencies are scanned by Trivy. |
-| **Container Hardening** | **Distroless Non-Root (`65532:65532`)** | Multi-stage build (`golang:1.27.2-alpine` builder) deploying to `gcr.io/distroless/static-debian12:nonroot` with read-only rootfs and dropped Linux capabilities. |
+| **Container Hardening** | **Distroless Non-Root (`65532:65532`)** | Multi-stage build (`golang:1.27.3-alpine` builder) deploying to `gcr.io/distroless/static-debian12:nonroot` with read-only rootfs and dropped Linux capabilities. |
 | **Kubernetes Compliance** | **Production Baseline Manifests** | Hardened `Deployment` (probes, non-root `SecurityContext`, `GOMEMLIMIT`), `ClusterIP Service`, `PodDisruptionBudget`, least-privilege `NetworkPolicy` (default deny egress, restricted ingress), and Kyverno `ClusterPolicy` rules (non-root, non-privileged, probes, resource limits). |
 | **CI/CD Automation** | **Active (GitHub Actions)** | Continuous integration enforcing formatting (`gofmt`), code vet (`go vet`), test suite with race detector, static binary build verification, offline Kyverno policy tests, a kind E2E smoke test under the `restricted` Pod Security profile, and Trivy security scanning. |
 | **Supply Chain** | **SBOM + Signed Releases** | Trivy-generated SPDX/CycloneDX SBOMs, and tagged releases pushed to GHCR with keyless Cosign signatures and SBOM attestations, verified at admission by Kyverno. |
@@ -88,7 +88,7 @@ go-k8s-secure-service/
 
 ### Prerequisites
 
-- [Go](https://go.dev/dl/) 1.27.2 or later
+- [Go](https://go.dev/dl/) 1.27.3 or later
 - Docker with BuildKit support (enabled by default in current Docker releases)
 - `curl` or any API client (optional, for testing endpoints)
 
