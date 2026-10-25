@@ -23,7 +23,12 @@ spec:
               kinds:
                 - Pod
       verifyImages:
-        - imageReferences:
+        # Cosign v3 (used by release.yml) stores signatures as Sigstore
+        # bundles attached via OCI referrers, not as legacy
+        # sha256-<digest>.sig tags. The default "Cosign" type only looks for
+        # the legacy tags and rejects every release with "no signatures found".
+        - type: SigstoreBundle
+          imageReferences:
             - "ghcr.io/cooler-sai/go-k8s-secure-service*"
           failureAction: Enforce
           mutateDigest: true
