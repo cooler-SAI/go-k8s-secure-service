@@ -10,6 +10,8 @@
 
 A lightweight, secure Go HTTP service designed for containerized deployment and orchestration in Kubernetes environments.
 
+**Contents:** [Status](#project-status) · [Overview](#overview) · [HTTP API](#http-api) · [Getting Started](#getting-started) · [Logging](#logging) · [Kubernetes](#kubernetes-integration) · [CI/CD](#cicd-pipelines) · [Troubleshooting](#troubleshooting) · [Roadmap](#roadmap--security-hardening) · [Security](#security)
+
 ---
 
 ## Project Status
@@ -43,6 +45,23 @@ A lightweight, secure Go HTTP service designed for containerized deployment and 
 - **Structured Logging**: Emits JSON logs to stdout with `zerolog`, ready for container log collectors (Loki, Fluent Bit, Cloud Logging, etc.). `net/http` internal errors go through the same handler.
 - **Hardened Container Image**: Uses a multi-stage build and a minimal distroless runtime, runs as a non-root user, and builds a static binary.
 - **Comprehensive Unit Tests**: High-coverage test suite verifying handlers, routing, server timeout settings, and shutdown lifecycle.
+
+---
+
+## HTTP API
+
+All responses are `text/plain`. Every route accepts `GET` and `HEAD` only.
+
+| Endpoint | Purpose | Normal response | Other responses |
+| :--- | :--- | :--- | :--- |
+| `GET /` | Root / greeting | `200` `Hello, World!` | — |
+| `GET /livez` | Liveness probe: the process is running | `200` `OK` | — |
+| `GET /readyz` | Readiness probe: the pod should receive traffic | `200` `OK` | `503` `Not Ready` after `SIGTERM`/`SIGINT` while draining |
+| Any other path | — | — | `404` `404 page not found` |
+| Known path, other method (e.g. `POST /`) | — | — | `405 Method Not Allowed` with `Allow: GET, HEAD` |
+
+`/livez` intentionally stays `200` during shutdown, so Kubernetes does not
+restart a pod that is draining.
 
 ---
 
@@ -107,7 +126,7 @@ go-k8s-secure-service/
 
 3. The server will start listening on port `:8080` (or the port specified by `$PORT`):
    ```text
-   {"time":"2026-10-16T01:42:19.704+03:00","level":"INFO","msg":"server starting","addr":"[::]:8080"}
+   {"level":"info","addr":"[::]:8080","time":"2026-10-16T01:42:19+03:00","message":"server starting"}
    ```
 
 ### Configuration and Environment Variables
@@ -145,6 +164,24 @@ with the normal test suite; to fuzz for a while:
 ```bash
 go test -run '^$' -fuzz FuzzHandler -fuzztime 60s .
 ```
+
+### Pre-Push Checks
+
+These commands mirror what CI runs, so a green local run should mean a green
+pipeline (`-race` needs CGO and a C toolchain):
+
+```bash
+gofmt -l .                       # must print nothing
+go mod verify
+go vet ./...
+go test -race -cover ./...
+go test -run '^$' -fuzz FuzzHandler -fuzztime 30s .
+kyverno test k8s/policies/tests  # needs the Kyverno CLI
+trivy fs --config trivy.yaml .   # deps, IaC misconfigurations, secrets
+```
+
+To scan a locally built image with the same settings, run
+`trivy image --config trivy.yaml go-k8s-secure-service:local`.
 
 ### Building and Running the Container
 
@@ -190,6 +227,35 @@ adding build caches to the final image.
   curl http://localhost:8080/readyz
   # Output: OK
   ```
+
+- **Unknown path and wrong method**:
+  ```bash
+  curl -i http://localhost:8080/missing   # HTTP/1.1 404 Not Found
+  curl -i -X POST http://localhost:8080/  # HTTP/1.1 405 Method Not Allowed, Allow: GET, HEAD
+  ```
+
+---
+
+## Logging
+
+The service writes one JSON object per line to stdout using
+[`zerolog`](https://github.com/rs/zerolog). Each line has `level`, `time`
+(RFC 3339) and `message`, plus event-specific fields. A normal start and
+`SIGTERM` shutdown looks like this:
+
+```text
+{"level":"info","addr":"[::]:8080","time":"2026-10-16T01:42:19+03:00","message":"server starting"}
+{"level":"info","drain_delay":"5s","time":"2026-10-16T01:45:02+03:00","message":"shutdown signal received, reporting not-ready and draining"}
+{"level":"info","shutdown_timeout":"10s","time":"2026-10-16T01:45:07+03:00","message":"drain delay elapsed, shutting down HTTP server"}
+{"level":"info","time":"2026-10-16T01:45:07+03:00","message":"server gracefully stopped"}
+```
+
+Errors are logged at `level: "error"` with an `error` field. Internal
+`net/http` errors carry `"component":"net/http"`. If the server cannot start
+or shut down cleanly, it logs `server terminated with error` and exits with
+code `1`.
+
+To follow logs in a cluster, run `kubectl logs -f deploy/go-k8s-secure-service`.
 
 ---
 
@@ -285,6 +351,66 @@ everything:
 ```bash
 kubectl apply -f k8s/
 ```
+
+### Deploying a Signed Release Image
+
+The manifest refers to a locally built `go-k8s-secure-service:v1.0.0`. To run
+the signed image from GHCR, point the Deployment at a release tag:
+
+```bash
+kubectl apply -f k8s/
+kubectl set image deployment/go-k8s-secure-service \
+  server=ghcr.io/cooler-sai/go-k8s-secure-service:v1.0.0
+kubectl rollout status deployment/go-k8s-secure-service
+```
+
+With the Kyverno policies installed, admission checks the Cosign signature.
+Images that are unsigned or signed by anyone other than this repository's
+release workflow are rejected.
+
+To reach the service without an ingress:
+
+```bash
+kubectl port-forward svc/go-k8s-secure-service 8080:80
+curl http://localhost:8080/
+```
+
+---
+
+## CI/CD Pipelines
+
+| Workflow | Triggers | What it does |
+| :--- | :--- | :--- |
+| [`ci.yml`](.github/workflows/ci.yml) | push / PR to `main` | `gofmt` check, `go mod verify`, `go vet`, race-enabled tests with coverage, 30s of `FuzzHandler`, static build; Kyverno policy tests; kind E2E smoke test |
+| [`trivy.yml`](.github/workflows/trivy.yml) | push / PR to `main`, weekly (Mon 06:00 UTC) | Repo scan (deps, IaC, secrets) and image scan with SARIF upload to Code Scanning; SPDX + CycloneDX SBOM artifact |
+| [`codeql.yml`](.github/workflows/codeql.yml) | push / PR to `main`, weekly (Wed 07:00 UTC) | CodeQL static analysis of the Go code |
+| [`scorecard.yml`](.github/workflows/scorecard.yml) | push to `main`, branch protection changes, weekly (Tue 06:30 UTC) | OpenSSF Scorecard supply-chain checks |
+| [`release.yml`](.github/workflows/release.yml) | push of a `v*` tag | Push image to GHCR, keyless Cosign signature, SBOM attestations, GitHub Release with signed SBOMs |
+
+Dependabot ([`.github/dependabot.yml`](.github/dependabot.yml)) opens weekly
+update PRs for Go modules, GitHub Actions and Docker base images. All actions
+and base images are pinned by SHA/digest.
+
+To cut a release:
+
+```bash
+git tag v1.0.1
+git push origin v1.0.1
+```
+
+---
+
+## Troubleshooting
+
+| Symptom | Likely cause and fix |
+| :--- | :--- |
+| `ErrImagePull` / `ImagePullBackOff` on kind or a local cluster | The cluster nodes don't have the local image. Run `kind load docker-image go-k8s-secure-service:v1.0.0 --name <cluster>`, or deploy the GHCR image ([above](#deploying-a-signed-release-image)). |
+| Pods rejected by admission with a Kyverno message | A manifest change broke a policy (root user, privileged, missing probes or limits), or a GHCR image is unsigned. Run `kyverno test k8s/policies/tests` locally to reproduce. |
+| Service unreachable from another namespace | The NetworkPolicy allows ingress only from the same namespace and `ingress-nginx`. Add your client or ingress namespace to `k8s/networkpolicy.yaml`. |
+| `/readyz` returns `503 Not Ready` | Expected while the pod drains after `SIGTERM`. Kubernetes removes the pod from endpoints. |
+| Pod `OOMKilled` | The 64Mi memory limit is too low for your load. Raise `resources.limits.memory` and keep `GOMEMLIMIT` at ~90% of it. |
+| Pod `SIGKILL`ed before draining finishes | `terminationGracePeriodSeconds` must exceed drain delay + shutdown timeout (5s + 10s). |
+| `failed to listen on :8080` | The port is already in use. Set another one, e.g. `PORT=9090 go run main.go`, and update the container port and probes to match. |
 
 ---
 
