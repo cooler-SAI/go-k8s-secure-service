@@ -462,7 +462,7 @@ git push origin v1.0.1
 
 ---
 
-## Security
+## Security Info
 
 Found a vulnerability? Please follow [`SECURITY.md`](SECURITY.md) and report it privately instead of opening a public issue.
 
