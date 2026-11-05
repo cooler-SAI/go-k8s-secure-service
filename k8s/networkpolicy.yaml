@@ -39,4 +39,28 @@ spec:
           port: metrics
   # No egress rules: the service makes no outbound calls (not even DNS),
   # so all egress is denied. Add explicit rules here if that changes.
+  #
+  # To export traces (OTEL_EXPORTER_OTLP_ENDPOINT in deployment.yaml), allow
+  # OTLP/HTTP to the collector and DNS to resolve its name, e.g.:
+  #
+  # egress:
+  #   - to:
+  #       - namespaceSelector:
+  #           matchLabels:
+  #             kubernetes.io/metadata.name: observability
+  #     ports:
+  #       - protocol: TCP
+  #         port: 4318
+  #   - to:
+  #       - namespaceSelector:
+  #           matchLabels:
+  #             kubernetes.io/metadata.name: kube-system
+  #         podSelector:
+  #           matchLabels:
+  #             k8s-app: kube-dns
+  #     ports:
+  #       - protocol: UDP
+  #         port: 53
+  #       - protocol: TCP
+  #         port: 53
   egress: []

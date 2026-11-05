@@ -268,7 +268,7 @@ func TestRunGracefulShutdown(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- run(ctx, ln, metricsLn, drainDelay)
+		done <- run(ctx, ln, metricsLn, drainDelay, newTestTracing(t))
 	}()
 
 	if status, err := getStatus(client, readyzURL); err != nil || status != http.StatusOK {
@@ -332,7 +332,7 @@ func TestRunServeError(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- run(context.Background(), ln, metricsLn, 0)
+		done <- run(context.Background(), ln, metricsLn, 0, newTestTracing(t))
 	}()
 
 	select {

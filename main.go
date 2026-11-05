@@ -26,8 +26,9 @@ const (
 	shutdownDelay = 5 * time.Second
 
 	// shutdownTimeout bounds how long in-flight requests may take to finish
-	// once the listener is closed. shutdownDelay + shutdownTimeout must stay
-	// below the pod's terminationGracePeriodSeconds.
+	// once the listener is closed. shutdownDelay + shutdownTimeout +
+	// tracingShutdownTimeout must stay below the pod's
+	// terminationGracePeriodSeconds.
 	shutdownTimeout = 10 * time.Second
 )
 
@@ -35,7 +36,7 @@ func mainPage(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	_, err := fmt.Fprintln(w, "Hello, World!")
 	if err != nil {
-		log.Error().Err(err).Str("path", r.URL.Path).Msg("failed to write response")
+		requestLogger(r).Error().Err(err).Str("path", r.URL.Path).Msg("failed to write response")
 		return
 	}
 }
@@ -44,7 +45,7 @@ func livezHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	_, err := fmt.Fprintln(w, "OK")
 	if err != nil {
-		log.Error().Err(err).Str("path", r.URL.Path).Msg("failed to write response")
+		requestLogger(r).Error().Err(err).Str("path", r.URL.Path).Msg("failed to write response")
 		return
 	}
 }
@@ -58,7 +59,7 @@ func readyzHandler(isReady *atomic.Bool) http.HandlerFunc {
 		w.WriteHeader(http.StatusOK)
 		_, err := fmt.Fprintln(w, "OK")
 		if err != nil {
-			log.Error().Err(err).Str("path", r.URL.Path).Msg("failed to write response")
+			requestLogger(r).Error().Err(err).Str("path", r.URL.Path).Msg("failed to write response")
 			return
 		}
 	}
@@ -98,13 +99,17 @@ func newServer(addr string, handler http.Handler) *http.Server {
 }
 
 // run serves application traffic on ln and Prometheus metrics on metricsLn
-// until ctx is cancelled, then drains and shuts both servers down.
-func run(ctx context.Context, ln, metricsLn net.Listener, drainDelay time.Duration) error {
+// until ctx is cancelled, then drains and shuts both servers down. Traffic
+// requests are traced with tr.
+func run(ctx context.Context, ln, metricsLn net.Listener, drainDelay time.Duration, tr *tracing) error {
 	var isReady atomic.Bool
 	isReady.Store(true)
 
 	metrics := newHTTPMetrics()
-	srv := newServer(ln.Addr().String(), metrics.instrument(setupRouter(&isReady)))
+	// Tracing must wrap the metrics middleware, not the other way round:
+	// otelhttp passes a copy of the request down, and both rely on the mux
+	// setting the matched pattern on the request they hold.
+	srv := newServer(ln.Addr().String(), tr.handler(metrics.instrument(setupRouter(&isReady))))
 	metricsSrv := newServer(metricsLn.Addr().String(), setupMetricsRouter(metrics))
 
 	// Buffered for both servers, so neither goroutine blocks on send.
@@ -202,5 +207,22 @@ func serve() error {
 		return fmt.Errorf("failed to listen on %s for metrics: %w", metricsAddr, err)
 	}
 
-	return run(ctx, ln, metricsLn, shutdownDelay)
+	tr, err := newTracing(ctx)
+	if err != nil {
+		_ = ln.Close()
+		_ = metricsLn.Close()
+		return fmt.Errorf("failed to set up tracing: %w", err)
+	}
+	log.Info().Bool("exporting", tr.exporting).Msg("tracing configured")
+
+	runErr := run(ctx, ln, metricsLn, shutdownDelay, tr)
+
+	// Flush buffered spans after the servers have stopped, so the spans of
+	// the last drained requests are exported too.
+	flushCtx, cancel := context.WithTimeout(context.Background(), tracingShutdownTimeout)
+	defer cancel()
+	if err := tr.shutdown(flushCtx); err != nil {
+		log.Warn().Err(err).Msg("tracing shutdown failed, some spans may be lost")
+	}
+	return runErr
 }

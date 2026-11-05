@@ -4,14 +4,14 @@
 [![Security Scan (Trivy)](https://github.com/cooler-SAI/go-k8s-secure-service/actions/workflows/trivy.yml/badge.svg)](https://github.com/cooler-SAI/go-k8s-secure-service/actions/workflows/trivy.yml)
 ![Go Version](https://img.shields.io/badge/Go-1.27.3-00ADD8?logo=go)
 ![Tests](https://img.shields.io/badge/tests-passing-brightgreen)
-![Coverage](https://img.shields.io/badge/coverage-79.4%25-brightgreen)
+![Coverage](https://img.shields.io/badge/coverage-77.0%25-brightgreen)
 [![Release](https://img.shields.io/github/v/release/cooler-SAI/go-k8s-secure-service?sort=semver)](https://github.com/cooler-SAI/go-k8s-secure-service/releases/latest)
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/cooler-SAI/go-k8s-secure-service/badge)](https://scorecard.dev/viewer/?uri=github.com/cooler-SAI/go-k8s-secure-service)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 A lightweight, secure Go HTTP service designed for containerized deployment and orchestration in Kubernetes environments.
 
-**Contents:** [Status](#project-status) · [Overview](#overview) · [HTTP API](#http-api) · [Getting Started](#getting-started) · [Logging](#logging) · [Metrics](#metrics) · [Kubernetes](#kubernetes-integration) · [CI/CD](#cicd-pipelines) · [Troubleshooting](#troubleshooting) · [Roadmap](#roadmap--security-hardening) · [Security](#security-info)
+**Contents:** [Status](#project-status) · [Overview](#overview) · [HTTP API](#http-api) · [Getting Started](#getting-started) · [Logging](#logging) · [Metrics](#metrics) · [Tracing](#tracing-opentelemetry) · [Kubernetes](#kubernetes-integration) · [CI/CD](#cicd-pipelines) · [Troubleshooting](#troubleshooting) · [Roadmap](#roadmap--security-hardening) · [Security](#security-info)
 
 ---
 
@@ -20,20 +20,20 @@ A lightweight, secure Go HTTP service designed for containerized deployment and 
 | Metric / Aspect | Status | Details |
 | :--- | :--- | :--- |
 | **Development Lifecycle** | **Stable / Production-Ready Baseline** | Core microservice architecture, Kubernetes orchestration manifests, and security hardening are complete. |
-| **Build & Test Suite** | **Passing (100%)** | Unit and integration tests verify handlers, routing, server timeout settings, metrics instrumentation, and shutdown lifecycle with **79.4%** statement coverage. Race detection runs in CI. |
+| **Build & Test Suite** | **Passing (100%)** | Unit and integration tests verify handlers, routing, server timeout settings, metrics, trace propagation, and shutdown lifecycle with **77.0%** statement coverage. Race detection runs in CI. |
 | **Security Scanning** | **Verified (Trivy SARIF)** | Automated weekly and PR/push scans (Trivy, plus CodeQL static analysis of the Go code) covering repository dependencies, container image, secret detection, and IaC/Kubernetes configurations (`CRITICAL,HIGH` threshold). |
-| **Dependencies** | **Minimal (one direct)** | Built on the Go standard library (`net/http`, `os/signal`, `sync/atomic`) plus a single direct dependency, [`zerolog`](https://github.com/rs/zerolog), for structured logging. Prometheus metrics are implemented without `client_golang`. Dependencies are scanned by Trivy. |
-| **Observability** | **Prometheus RED Metrics** | Request rate, errors and duration exposed at `/metrics` on a separate internal port (`:9090`) that is not part of the Service or Ingress; NetworkPolicy admits only the `monitoring` namespace. |
+| **Dependencies** | **Small, scanned** | Go standard library plus [`zerolog`](https://github.com/rs/zerolog) for structured logging and the official [OpenTelemetry Go SDK](https://opentelemetry.io/docs/languages/go/) (`otel`, `otel/sdk`, `otelhttp`, OTLP/HTTP exporter) for tracing. Prometheus metrics are implemented without `client_golang`. All modules are scanned by Trivy and updated by Dependabot. |
+| **Observability** | **RED Metrics + OpenTelemetry Tracing** | Request rate, errors and duration at `/metrics` on a separate internal port (`:9090`) that is not part of the Service or Ingress. Distributed tracing with W3C Trace Context (`traceparent`) propagation on incoming and outgoing requests, OTLP/HTTP export, and `trace_id`/`span_id` in request logs. |
 | **Container Hardening** | **Distroless Non-Root (`65532:65532`)** | Multi-stage build (`golang:1.27.3-alpine` builder) deploying to `gcr.io/distroless/static-debian13:nonroot` with read-only rootfs and dropped Linux capabilities. |
-| **Kubernetes Compliance** | **Production Baseline Manifests** | Hardened `Deployment` (probes, non-root `SecurityContext`, `GOMEMLIMIT`), `ClusterIP Service`, `PodDisruptionBudget`, least-privilege `NetworkPolicy` (default deny egress, restricted ingress), and CEL-based Kyverno `ValidatingPolicy`/`ImageValidatingPolicy` rules (non-root, non-privileged, probes, resource limits, image signature). |
-| **CI/CD Automation** | **Active (GitHub Actions)** | Continuous integration enforcing formatting (`gofmt`), code vet (`go vet`), test suite with race detector, static binary build verification, offline Kyverno policy tests, a kind E2E smoke test under the `restricted` Pod Security profile with Kyverno enforcing (including live Cosign signature verification), and Trivy security scanning. |
+| **Kubernetes Compliance** | **Production Baseline Manifests** | Hardened `Deployment` (probes, non-root `SecurityContext`, `GOMEMLIMIT`), `ClusterIP Service`, `PodDisruptionBudget`, least-privilege `NetworkPolicy` (default deny egress, restricted ingress for traffic and metrics), and CEL-based Kyverno `ValidatingPolicy`/`ImageValidatingPolicy` rules (non-root, non-privileged, probes, resource limits, image signature). |
+| **CI/CD Automation** | **Active (GitHub Actions)** | Continuous integration enforcing formatting (`gofmt`), module verification, code vet (`go vet`), test suite with race detector, router fuzzing, static binary build verification, offline Kyverno policy tests (checksum-verified CLI), a kind E2E smoke test under the `restricted` Pod Security profile with Kyverno enforcing (including live Cosign signature verification), and Trivy security scanning. |
 | **Supply Chain** | **SBOM + Signed Releases** | Trivy-generated SPDX/CycloneDX SBOMs, and tagged releases pushed to GHCR with keyless Cosign signatures and SBOM attestations, verified at admission by Kyverno. |
 
 ---
 
 ## Overview
 
-`go-k8s-secure-service` serves as a foundation for building resilient, cloud-native microservices in Go. It provides standard HTTP endpoints, built-in Kubernetes health check probes (`/livez` and `/readyz`), Prometheus RED metrics on a separate internal port, graceful shutdown handling via `SIGTERM`, and an enterprise-grade security baseline for containerized environments.
+`go-k8s-secure-service` serves as a foundation for building resilient, cloud-native microservices in Go. It provides standard HTTP endpoints, built-in Kubernetes health check probes (`/livez` and `/readyz`), Prometheus RED metrics on a separate internal port, OpenTelemetry distributed tracing with W3C `traceparent` propagation, graceful shutdown handling via `SIGTERM`, and an enterprise-grade security baseline for containerized environments.
 
 ## Features
 
@@ -45,9 +45,10 @@ A lightweight, secure Go HTTP service designed for containerized deployment and 
 - **Graceful Shutdown (`SIGTERM` / `SIGINT`)**: Listens for termination signals from Kubernetes (`SIGTERM`) or process interruptions (`SIGINT`), reporting not-ready and continuing to serve for a 5-second drain delay while endpoint removal propagates, then running a graceful shutdown (`srv.Shutdown()`) with a 10-second window for in-flight requests.
 - **Hardened HTTP Timeouts**: Explicitly configures `ReadHeaderTimeout`, `ReadTimeout`, `WriteTimeout`, and `IdleTimeout` to mitigate Slowloris and connection starvation attacks.
 - **Prometheus Metrics (RED)**: Request rate, errors and duration per route at `/metrics`, served on a separate internal port (`METRICS_PORT`, default `:9090`) so it is never exposed through the Service or an Ingress. No `client_golang` dependency. See [Metrics](#metrics).
-- **Structured Logging**: Emits JSON logs to stdout with `zerolog`, ready for container log collectors (Loki, Fluent Bit, Cloud Logging, etc.). `net/http` internal errors go through the same handler.
+- **Distributed Tracing (OpenTelemetry)**: Continues the caller's trace from the W3C `traceparent` header (or starts a new one), and provides an instrumented HTTP client that injects `traceparent` into outgoing requests. Spans are exported over OTLP/HTTP when `OTEL_EXPORTER_OTLP_ENDPOINT` is set. See [Tracing](#tracing-opentelemetry).
+- **Structured Logging**: Emits JSON logs to stdout with `zerolog`, ready for container log collectors (Loki, Fluent Bit, Cloud Logging, etc.). `net/http` and OpenTelemetry internal errors go through the same logger, and request error logs carry `trace_id`/`span_id`.
 - **Hardened Container Image**: Uses a multi-stage build and a minimal distroless runtime, runs as a non-root user, and builds a static binary.
-- **Comprehensive Unit Tests**: High-coverage test suite verifying handlers, routing, metrics, server timeout settings, and shutdown lifecycle.
+- **Comprehensive Unit Tests**: Test suite verifying handlers, routing, metrics, end-to-end trace propagation (incoming `traceparent` → server span → client span → downstream `traceparent`), OTLP export, server timeout settings, and shutdown lifecycle.
 
 ---
 
@@ -65,6 +66,10 @@ All responses are `text/plain`. Every route accepts `GET` and `HEAD` only.
 
 `/livez` intentionally stays `200` during shutdown, so Kubernetes does not
 restart a pod that is draining.
+
+Requests may carry the W3C Trace Context headers `traceparent`/`tracestate`
+and `baggage`; the service continues that trace. They are optional and never
+change the response.
 
 The metrics server listens on its own port (`METRICS_PORT`, default `:9090`)
 and serves a single route:
@@ -95,10 +100,10 @@ go-k8s-secure-service/
 │   ├── smoke.sh           # Deploys to a cluster and checks endpoints via port-forward
 │   └── admission.sh       # Live Kyverno admission checks, incl. Cosign signature verification
 ├── k8s/
-│   ├── deployment.yaml    # Hardened Deployment (security context, probes, resources)
+│   ├── deployment.yaml    # Hardened Deployment (security context, probes, resources, OTel env)
 │   ├── service.yaml       # ClusterIP Service exposing the HTTP port
 │   ├── pdb.yaml           # PodDisruptionBudget keeping a replica up during disruptions
-│   ├── networkpolicy.yaml # Default-deny NetworkPolicy allowing only HTTP ingress
+│   ├── networkpolicy.yaml # Default-deny NetworkPolicy: HTTP ingress, metrics from monitoring only
 │   └── policies/          # CEL-based Kyverno ValidatingPolicy/ImageValidatingPolicy and offline tests (tests/)
 ├── .aiignore           # AI tool ignore rules
 ├── .gitignore          # Git ignore rules
@@ -112,6 +117,8 @@ go-k8s-secure-service/
 ├── main_test.go        # Unit and integration test suite
 ├── metrics.go          # Prometheus RED metrics middleware and /metrics exposition (stdlib only)
 ├── metrics_test.go     # Metrics, histogram and label-cardinality tests
+├── tracing.go          # OpenTelemetry setup, traced handler, outbound client, log correlation
+├── tracing_test.go     # Trace propagation, span naming, probe filtering and OTLP export tests
 ├── trivy.yaml          # Shared Trivy scanner configuration
 └── README.md           # Project documentation
 ```
@@ -142,24 +149,27 @@ go-k8s-secure-service/
 3. The service starts listening for traffic on `:8080` (or `$PORT`) and for
    Prometheus scrapes on `:9090` (or `$METRICS_PORT`):
    ```text
+   {"level":"info","exporting":false,"time":"2026-11-05T22:48:55+03:00","message":"tracing configured"}
    {"level":"info","server":"metrics","addr":"[::]:9090","time":"2026-11-05T22:48:55+03:00","message":"server starting"}
    {"level":"info","server":"http","addr":"[::]:8080","time":"2026-11-05T22:48:55+03:00","message":"server starting"}
    ```
 
 ### Configuration and Environment Variables
 
-The service supports configuring the traffic and metrics listen ports through environment variables. Operational timeouts and shutdown intervals use production-tuned defaults defined in `main.go`.
+The service is configured through environment variables: the traffic and metrics listen ports, and tracing through the standard `OTEL_*` variables. Operational timeouts and shutdown intervals use production-tuned defaults defined in `main.go` and `tracing.go`.
 
 | Setting | Configuration | Default | Description |
 | --- | --- | --- | --- |
 | Listen port | `PORT` env var | `:8080` | Binds the HTTP server to the specified port on all network interfaces (e.g., `PORT=8080` or `PORT=:8080`). |
 | Metrics port | `METRICS_PORT` env var | `:9090` | Binds the internal metrics server (`/metrics` only). Must differ from `PORT`. |
+| Tracing | `OTEL_*` env vars | spans created, not exported | See [Tracing configuration](#tracing-configuration). |
 | Read-header timeout | Fixed (`main.go`) | 5 seconds | Limits the time allowed to read request headers. |
 | Read timeout | Fixed (`main.go`) | 10 seconds | Limits the time allowed to read the full request. |
 | Write timeout | Fixed (`main.go`) | 10 seconds | Limits the time allowed to write a response. |
 | Idle timeout | Fixed (`main.go`) | 60 seconds | Limits how long an idle keep-alive connection remains open. |
 | Shutdown drain delay | Fixed (`main.go`) | 5 seconds | Time the server keeps serving (while `/readyz` reports 503) after a termination signal, before closing the listener. |
 | Shutdown timeout | Fixed (`main.go`) | 10 seconds | Maximum time allowed for in-flight requests to finish once the listener is closed. |
+| Trace flush timeout | Fixed (`tracing.go`) | 5 seconds | Maximum time to export buffered spans after the servers have stopped. |
 
 To change the timeout settings, update the corresponding server configuration in
 `main.go`; both servers use the same timeouts. The Kubernetes container ports,
@@ -197,6 +207,11 @@ go test -run '^$' -fuzz FuzzHandler -fuzztime 30s .
 kyverno test k8s/policies/tests  # needs the Kyverno CLI
 trivy fs --config trivy.yaml .   # deps, IaC misconfigurations, secrets
 ```
+
+On Windows with `core.autocrlf=true`, `gofmt -l .` lists every Go file because
+of the CRLF line endings in the working copy; Git stores LF, which is what CI
+checks. Use `git ls-files '*.go' | xargs -I{} sh -c 'git show :{} | gofmt -l'`
+there, or check in WSL.
 
 To scan a locally built image with the same settings, run
 `trivy image --config trivy.yaml go-k8s-secure-service:local`.
@@ -270,6 +285,7 @@ The service writes one JSON object per line to stdout using
 `SIGTERM` shutdown looks like this:
 
 ```text
+{"level":"info","exporting":false,"time":"2026-10-16T01:42:19+03:00","message":"tracing configured"}
 {"level":"info","server":"metrics","addr":"[::]:9090","time":"2026-10-16T01:42:19+03:00","message":"server starting"}
 {"level":"info","server":"http","addr":"[::]:8080","time":"2026-10-16T01:42:19+03:00","message":"server starting"}
 {"level":"info","drain_delay":"5s","time":"2026-10-16T01:45:02+03:00","message":"shutdown signal received, reporting not-ready and draining"}
@@ -278,7 +294,10 @@ The service writes one JSON object per line to stdout using
 ```
 
 Errors are logged at `level: "error"` with an `error` field. Internal
-`net/http` errors carry `"component":"net/http"`. If the server cannot start
+`net/http` errors carry `"component":"net/http"`, and OpenTelemetry errors
+(for example a collector that cannot be reached) are logged at `warn` with
+`"component":"otel"`. Errors while handling a traced request also carry
+`trace_id` and `span_id`, so a log line leads straight to its trace. If the server cannot start
 or shut down cleanly, it logs `server terminated with error` and exits with
 code `1`.
 
@@ -356,6 +375,83 @@ rule in [`k8s/networkpolicy.yaml`](k8s/networkpolicy.yaml).
 
 ---
 
+## Tracing (OpenTelemetry)
+
+The service uses the [OpenTelemetry Go SDK](https://opentelemetry.io/docs/languages/go/)
+for distributed tracing, with [W3C Trace Context](https://www.w3.org/TR/trace-context/)
+propagation in both directions:
+
+- **Incoming requests**: the `traceparent` (and `tracestate`, `baggage`)
+  headers are extracted and the request's server span joins the caller's
+  trace. Without them, a new trace is started.
+- **Outgoing requests**: `newOutboundClient` in [`tracing.go`](tracing.go)
+  returns an `http.Client` whose transport starts a client span and injects
+  `traceparent` into the outgoing request, so the downstream service
+  continues the same trace. The service makes no outbound calls today; use this
+  client for any you add, and build requests with the incoming request's
+  context:
+
+  ```go
+  req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, url, nil)
+  resp, err := client.Do(req) // client := newOutboundClient(tr)
+  ```
+
+A request from an upstream service therefore produces one connected trace:
+
+```text
+upstream (span P) ──traceparent T/P──▶ server span S "GET /" ──▶ client span C ──traceparent T/C──▶ downstream
+                                       (trace T, parent P)       (trace T, parent S)
+```
+
+Span names follow the HTTP semantic conventions: `GET /` for a matched route
+(with an `http.route` attribute) and just the method (`GET`) when no route
+matched, so raw request paths never become span names. The liveness and
+readiness probes are not traced; they would produce a span every few seconds
+per pod. `/metrics` runs on its own server and is not traced either.
+
+### Tracing configuration
+
+Tracing is configured with the standard
+[OpenTelemetry environment variables](https://opentelemetry.io/docs/specs/otel/configuration/sdk-environment-variables/):
+
+| Variable | Default | Effect |
+| :--- | :--- | :--- |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` (or `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`) | unset | When set (e.g. `http://otel-collector:4318`), spans are batched and exported over OTLP/HTTP. When unset, spans are still created and propagated and trace IDs appear in logs, but nothing is exported. |
+| `OTEL_SERVICE_NAME` | `go-k8s-secure-service` | `service.name` resource attribute. |
+| `OTEL_RESOURCE_ATTRIBUTES` | — | Extra resource attributes; the Deployment sets `k8s.pod.name`, `k8s.namespace.name` and `k8s.node.name` from the downward API. |
+| `OTEL_TRACES_SAMPLER` / `OTEL_TRACES_SAMPLER_ARG` | `parentbased_always_on` | Sampling, e.g. `parentbased_traceidratio` with `0.1` to keep 10% of new traces. |
+| `OTEL_SDK_DISABLED` | `false` | `true` disables span recording; `traceparent` is still passed through unchanged from incoming to outgoing requests. |
+| Other `OTEL_EXPORTER_OTLP_*` | SDK defaults | Headers, timeout, compression, TLS certificates, read by the exporter. |
+
+To try it locally with a collector or Jaeger listening for OTLP/HTTP on 4318:
+
+```bash
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 go run .
+curl -H 'traceparent: 00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01' http://localhost:8080/
+```
+
+Notes:
+
+- **Exporting in Kubernetes** needs egress. The NetworkPolicy denies all
+  egress by default, so to export spans set `OTEL_EXPORTER_OTLP_ENDPOINT` in
+  [`k8s/deployment.yaml`](k8s/deployment.yaml) and enable the egress rule for
+  the collector and DNS that is provided, commented out, in
+  [`k8s/networkpolicy.yaml`](k8s/networkpolicy.yaml).
+- **Untrusted `traceparent`**: with the default parent-based sampler, a
+  client that sends `traceparent` with the sampled flag decides whether its
+  request is sampled. If the service is reachable from the internet, let the
+  ingress or gateway start (or reset) traces, or set
+  `OTEL_TRACES_SAMPLER=traceidratio` so the service samples independently.
+- **Shutdown**: buffered spans are flushed after both servers have stopped,
+  for up to 5 seconds, so the spans of the last drained requests are not lost.
+- **Footprint**: the SDK and the OTLP/HTTP exporter (which pulls in the
+  protobuf and gRPC status packages for its wire format, though it does not use
+  gRPC transport) grow the static binary from about 6 MB to about 16 MB.
+  OpenTelemetry's own HTTP metrics are disabled, since [`metrics.go`](metrics.go)
+  already records them.
+
+---
+
 ## Kubernetes Integration
 
 ### Pod Lifecycle, Probes, and SIGTERM Handling
@@ -365,11 +461,13 @@ When Kubernetes scales down a deployment, performs a rolling update, or terminat
 2. In parallel, Kubernetes starts removing the pod from Service endpoints. That removal reaches kube-proxy, load balancers, and ingress controllers asynchronously, so new requests can still arrive for a few seconds.
 3. `go-k8s-secure-service` catches `SIGTERM`, flips `/readyz` to `503 Service Unavailable` (`Not Ready`), and **keeps serving for a 5-second drain delay** so requests still being routed to the pod are handled instead of refused.
 4. After the delay, `http.Server.Shutdown(shutdownCtx)` closes the listener and grants in-flight requests up to 10 seconds to finish processing cleanly.
-5. The process exits cleanly with code 0 once all active connections drain.
+5. The metrics server is shut down, then buffered trace spans are flushed to the collector (up to 5 seconds).
+6. The process exits cleanly with code 0.
 
-The drain delay (5s) plus the shutdown timeout (10s) must stay below the pod's
-`terminationGracePeriodSeconds` (30s in `k8s/deployment.yaml`); otherwise the
-kubelet sends `SIGKILL` before draining finishes.
+The drain delay (5s), the shutdown timeout (10s) and the trace flush timeout
+(5s) together must stay below the pod's `terminationGracePeriodSeconds` (30s
+in `k8s/deployment.yaml`); otherwise the kubelet sends `SIGKILL` before
+draining finishes.
 
 ### Kubernetes Manifests
 
@@ -381,27 +479,32 @@ The manifests live in [`k8s/`](k8s/):
   configures the `/livez` and `/readyz` probes, and sets `GOMEMLIMIT` to ~90%
   of the memory limit so the Go GC works harder before the container is
   OOM-killed. It declares two named ports, `http` (`8080`) and `metrics`
-  (`9090`), and Prometheus scrape annotations.
+  (`9090`), Prometheus scrape annotations, and the OpenTelemetry settings
+  (`OTEL_SERVICE_NAME`, Kubernetes resource attributes from the downward API,
+  and a commented-out `OTEL_EXPORTER_OTLP_ENDPOINT`).
 - [`service.yaml`](k8s/service.yaml): a `ClusterIP` Service routing port `80`
   to the container's named `http` port (`8080`). The `metrics` port is
   deliberately left off, so an Ingress or Gateway pointing at this Service
   can never reach `/metrics`.
 - [`pdb.yaml`](k8s/pdb.yaml): a `PodDisruptionBudget` with `minAvailable: 1`,
   so node drains and cluster upgrades never evict both replicas at once.
+  `unhealthyPodEvictionPolicy: AlwaysAllow` lets pods that never became ready
+  be evicted, so a broken rollout cannot block node drains.
 - [`networkpolicy.yaml`](k8s/networkpolicy.yaml): default-deny for the
   service's pods. Ingress is allowed on the `http` port from pods in the
   same namespace and from the `ingress-nginx` namespace (change this to match
   your ingress controller or Gateway), and on the `metrics` port only from the
   `monitoring` namespace (change this to where Prometheus runs). All egress is denied, since the service
-  makes no outbound calls. NetworkPolicy is enforced only if your CNI supports
+  makes no outbound calls; a commented-out rule shows how to allow OTLP
+  export to a collector in the `observability` namespace plus DNS. NetworkPolicy is enforced only if your CNI supports
   it (e.g. Calico, Cilium).
 - [`policies/`](k8s/policies/): CEL-based Kyverno policies
   (`policies.kyverno.io/v1`, Kyverno 1.19+). Four `ValidatingPolicy`
   resources deny containers running as `runAsUser: 0`, deny privileged
   containers, and require liveness/readiness probes and CPU/memory limits.
   Kyverno auto-generates the same checks for Deployments, StatefulSets,
-  DaemonSets, ReplicaSets, Jobs and CronJobs. System namespaces are
-  excluded. They are not applied by `kubectl apply -f k8s/`; install
+  DaemonSets, ReplicaSets, Jobs and CronJobs. The `kube-system`,
+  `kube-public`, `kube-node-lease` and `kyverno` namespaces are excluded. They are not applied by `kubectl apply -f k8s/`; install
   Kyverno and apply them with `kubectl apply -f k8s/policies/`. Policy
   tests (`kyverno test k8s/policies/tests`) run offline against fixture pods
   and `deployment.yaml`, and CI runs them on every push and PR.
@@ -447,8 +550,9 @@ Deployment is also admitted under them.
 [`e2e/admission.sh`](e2e/admission.sh) then checks the policies against the
 live cluster with server-side dry-runs:
 
-- the Deployment with a signed release image from GHCR is admitted, which
-  verifies its Cosign signature against Sigstore;
+- the Deployment with a signed release image from GHCR (`v1.0.3`, pinned by
+  digest; override with `SIGNED_IMAGE`) is admitted, which verifies its Cosign
+  signature against Sigstore;
 - the same image is rejected when the policy expects a different signer, so
   the signer identity is really checked;
 - a root, privileged pod without probes or limits is rejected by each of the
@@ -507,7 +611,7 @@ curl http://localhost:8080/
 
 | Workflow | Triggers | What it does |
 | :--- | :--- | :--- |
-| [`ci.yml`](.github/workflows/ci.yml) | push / PR to `main` | `gofmt` check, `go mod verify`, `go vet`, race-enabled tests with coverage, 30s of `FuzzHandler`, static build; Kyverno policy tests; kind E2E smoke test and live Kyverno admission test |
+| [`ci.yml`](.github/workflows/ci.yml) | push / PR to `main` | `gofmt` check, `go mod verify`, `go vet`, race-enabled tests with coverage, 30s of `FuzzHandler`, static build; Kyverno policy tests (CLI pinned by SHA-256); kind E2E smoke test and live Kyverno admission test |
 | [`trivy.yml`](.github/workflows/trivy.yml) | push / PR to `main`, weekly (Mon 06:00 UTC) | Repo scan (deps, IaC, secrets) and image scan with SARIF upload to Code Scanning; SPDX + CycloneDX SBOM artifact |
 | [`codeql.yml`](.github/workflows/codeql.yml) | push / PR to `main`, weekly (Wed 07:00 UTC) | CodeQL static analysis of the Go code |
 | [`scorecard.yml`](.github/workflows/scorecard.yml) | push to `main`, branch protection changes, weekly (Tue 06:30 UTC) | OpenSSF Scorecard supply-chain checks |
@@ -523,8 +627,8 @@ GitHub Release itself, so don't create it by hand:
 
 ```bash
 git switch main && git pull --ff-only
-git tag -a v1.0.9 -m "v1.0.9"
-git push origin v1.0.9
+git tag -a v1.0.10 -m "v1.0.10"
+git push origin v1.0.10
 ```
 
 Published releases are listed on the
@@ -543,7 +647,9 @@ Published releases are listed on the
 | Service unreachable from another namespace | The NetworkPolicy allows ingress only from the same namespace and `ingress-nginx`. Add your client or ingress namespace to `k8s/networkpolicy.yaml`. |
 | `/readyz` returns `503 Not Ready` | Expected while the pod drains after `SIGTERM`. Kubernetes removes the pod from endpoints. |
 | Pod `OOMKilled` | The 64Mi memory limit is too low for your load. Raise `resources.limits.memory` and keep `GOMEMLIMIT` at ~90% of it. |
-| Pod `SIGKILL`ed before draining finishes | `terminationGracePeriodSeconds` must exceed drain delay + shutdown timeout (5s + 10s). |
+| Pod `SIGKILL`ed before draining finishes | `terminationGracePeriodSeconds` must exceed drain delay + shutdown timeout + trace flush (5s + 10s + 5s). |
+| No traces in the backend | `OTEL_EXPORTER_OTLP_ENDPOINT` is unset (the `tracing configured` log line shows `"exporting":false`), or the NetworkPolicy blocks egress to the collector or DNS: enable the egress rule in `k8s/networkpolicy.yaml`. Export failures are logged with `"component":"otel"`. |
+| Traces are not connected across services | The caller must send `traceparent`, and outgoing calls must use `newOutboundClient` with the incoming request's context (`http.NewRequestWithContext(r.Context(), ...)`). |
 | `failed to listen on :8080` | The port is already in use. Set another one, e.g. `PORT=8081 go run .`, and update the container port and probes to match. |
 | `failed to listen on :9090 for metrics` | The metrics port is in use (or equals `PORT`). Set another one, e.g. `METRICS_PORT=9091 go run .`, and update the `metrics` container port and `prometheus.io/port` annotation. |
 
@@ -570,6 +676,7 @@ Published releases are listed on the
 - [x] **Static Analysis (CodeQL)**: CodeQL scans the Go code on every push and PR and weekly, reporting to GitHub Code Scanning.
 - [x] **Security Policy**: [`SECURITY.md`](SECURITY.md) with private vulnerability reporting.
 - [x] **Signed Releases**: GitHub Releases ship SBOMs with keyless Sigstore bundles.
+- [x] **Distributed Tracing (OpenTelemetry)**: W3C Trace Context propagation for incoming and outgoing requests, OTLP/HTTP export, Kubernetes resource attributes, and `trace_id`/`span_id` in request logs.
 - [x] **Prometheus Metrics (RED)**: Request rate, errors and duration on a separate internal metrics port (`:9090`), kept off the Service and Ingress and restricted by NetworkPolicy, without adding `client_golang`.
 
 ---
