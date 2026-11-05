@@ -75,6 +75,14 @@ func setupRouter(isReady *atomic.Bool) http.Handler {
 	return mux
 }
 
+// setupMetricsRouter serves /metrics on the internal metrics port only, so
+// it is never reachable through the traffic Service or an Ingress.
+func setupMetricsRouter(metrics *httpMetrics) http.Handler {
+	mux := http.NewServeMux()
+	mux.Handle("GET /metrics", metrics)
+	return mux
+}
+
 func newServer(addr string, handler http.Handler) *http.Server {
 	return &http.Server{
 		Addr:              addr,
@@ -89,23 +97,36 @@ func newServer(addr string, handler http.Handler) *http.Server {
 	}
 }
 
-func run(ctx context.Context, ln net.Listener, drainDelay time.Duration) error {
+// run serves application traffic on ln and Prometheus metrics on metricsLn
+// until ctx is cancelled, then drains and shuts both servers down.
+func run(ctx context.Context, ln, metricsLn net.Listener, drainDelay time.Duration) error {
 	var isReady atomic.Bool
 	isReady.Store(true)
 
-	srv := newServer(ln.Addr().String(), setupRouter(&isReady))
+	metrics := newHTTPMetrics()
+	srv := newServer(ln.Addr().String(), metrics.instrument(setupRouter(&isReady)))
+	metricsSrv := newServer(metricsLn.Addr().String(), setupMetricsRouter(metrics))
 
-	serverErr := make(chan error, 1)
-	go func() {
-		log.Info().Str("addr", ln.Addr().String()).Msg("server starting")
-		if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			serverErr <- err
+	// Buffered for both servers, so neither goroutine blocks on send.
+	serverErr := make(chan error, 2)
+	serve := func(name string, s *http.Server, l net.Listener) {
+		log.Info().Str("server", name).Str("addr", l.Addr().String()).Msg("server starting")
+		if err := s.Serve(l); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			serverErr <- fmt.Errorf("%s server: %w", name, err)
 		}
-		close(serverErr)
-	}()
+	}
+	go serve("http", srv, ln)
+	go serve("metrics", metricsSrv, metricsLn)
+
+	// If either server fails, stop the other one too.
+	closeAll := func() {
+		_ = srv.Close()
+		_ = metricsSrv.Close()
+	}
 
 	select {
 	case err := <-serverErr:
+		closeAll()
 		return fmt.Errorf("server error: %w", err)
 	case <-ctx.Done():
 		isReady.Store(false)
@@ -117,6 +138,7 @@ func run(ctx context.Context, ln net.Listener, drainDelay time.Duration) error {
 		// still being routed to this pod.
 		select {
 		case err := <-serverErr:
+			closeAll()
 			return fmt.Errorf("server error during drain: %w", err)
 		case <-time.After(drainDelay):
 		}
@@ -126,7 +148,9 @@ func run(ctx context.Context, ln net.Listener, drainDelay time.Duration) error {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 		defer cancel()
 
-		if err := srv.Shutdown(shutdownCtx); err != nil {
+		// Traffic first, then metrics, so the drain stays observable until
+		// the last in-flight request has finished.
+		if err := errors.Join(srv.Shutdown(shutdownCtx), metricsSrv.Shutdown(shutdownCtx)); err != nil {
 			return fmt.Errorf("graceful shutdown failed: %w", err)
 		}
 		log.Info().Msg("server gracefully stopped")
@@ -134,13 +158,12 @@ func run(ctx context.Context, ln net.Listener, drainDelay time.Duration) error {
 	}
 }
 
-// getListenAddr resolves the server listen address. If the PORT environment
-// variable is set, it binds to that port (e.g. "8080" or ":8080").
-// If unset or empty, it defaults to ":8080".
-func getListenAddr() string {
-	port := strings.TrimSpace(os.Getenv("PORT"))
+// listenAddr resolves a listen address from the environment variable env
+// (e.g. PORT=8080 or PORT=:8080). If unset or empty, it returns fallback.
+func listenAddr(env, fallback string) string {
+	port := strings.TrimSpace(os.Getenv(env))
 	if port == "" {
-		return ":8080"
+		return fallback
 	}
 	if !strings.HasPrefix(port, ":") {
 		return ":" + port
@@ -166,11 +189,18 @@ func serve() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	addr := getListenAddr()
+	addr := listenAddr("PORT", ":8080")
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		return fmt.Errorf("failed to listen on %s: %w", addr, err)
 	}
 
-	return run(ctx, ln, shutdownDelay)
+	metricsAddr := listenAddr("METRICS_PORT", ":9090")
+	metricsLn, err := net.Listen("tcp", metricsAddr)
+	if err != nil {
+		_ = ln.Close()
+		return fmt.Errorf("failed to listen on %s for metrics: %w", metricsAddr, err)
+	}
+
+	return run(ctx, ln, metricsLn, shutdownDelay)
 }

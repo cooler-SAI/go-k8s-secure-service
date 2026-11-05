@@ -255,7 +255,9 @@ func TestRunGracefulShutdown(t *testing.T) {
 	const drainDelay = 300 * time.Millisecond
 
 	ln := newTestListener(t)
+	metricsLn := newTestListener(t)
 	readyzURL := "http://" + ln.Addr().String() + "/readyz"
+	metricsURL := "http://" + metricsLn.Addr().String() + "/metrics"
 	client := &http.Client{
 		Timeout:   time.Second,
 		Transport: &http.Transport{DisableKeepAlives: true},
@@ -266,11 +268,18 @@ func TestRunGracefulShutdown(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- run(ctx, ln, drainDelay)
+		done <- run(ctx, ln, metricsLn, drainDelay)
 	}()
 
 	if status, err := getStatus(client, readyzURL); err != nil || status != http.StatusOK {
 		t.Fatalf("/readyz before shutdown: status %d, err %v; want 200", status, err)
+	}
+	if status, err := getStatus(client, metricsURL); err != nil || status != http.StatusOK {
+		t.Fatalf("/metrics on the metrics port: status %d, err %v; want 200", status, err)
+	}
+	// /metrics must not be reachable on the traffic port.
+	if status, err := getStatus(client, "http://"+ln.Addr().String()+"/metrics"); err != nil || status != http.StatusNotFound {
+		t.Fatalf("/metrics on the traffic port: status %d, err %v; want 404", status, err)
 	}
 
 	// Trigger shutdown via context cancellation (simulates SIGTERM/SIGINT)
@@ -309,16 +318,21 @@ func TestRunGracefulShutdown(t *testing.T) {
 	if _, err := getStatus(client, readyzURL); err == nil {
 		t.Error("server still accepting connections after shutdown")
 	}
+	if _, err := getStatus(client, metricsURL); err == nil {
+		t.Error("metrics server still accepting connections after shutdown")
+	}
 }
 
 func TestRunServeError(t *testing.T) {
 	ln := newTestListener(t)
+	metricsLn := newTestListener(t)
+	metricsAddr := metricsLn.Addr().String()
 	// A closed listener makes Serve fail immediately.
 	_ = ln.Close()
 
 	done := make(chan error, 1)
 	go func() {
-		done <- run(context.Background(), ln, 0)
+		done <- run(context.Background(), ln, metricsLn, 0)
 	}()
 
 	select {
@@ -329,9 +343,15 @@ func TestRunServeError(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("run did not return after serve error")
 	}
+
+	// The metrics server must be stopped along with the failed one.
+	if conn, err := net.DialTimeout("tcp", metricsAddr, time.Second); err == nil {
+		_ = conn.Close()
+		t.Error("metrics server still accepting connections after traffic server failed")
+	}
 }
 
-func TestGetListenAddr(t *testing.T) {
+func TestListenAddr(t *testing.T) {
 	tests := []struct {
 		name     string
 		envPort  string
@@ -383,8 +403,8 @@ func TestGetListenAddr(t *testing.T) {
 				t.Setenv("PORT", "")
 				os.Unsetenv("PORT")
 			}
-			if addr := getListenAddr(); addr != tt.expected {
-				t.Errorf("getListenAddr() = %q, want %q", addr, tt.expected)
+			if addr := listenAddr("PORT", ":8080"); addr != tt.expected {
+				t.Errorf("listenAddr(PORT) = %q, want %q", addr, tt.expected)
 			}
 		})
 	}
@@ -418,7 +438,8 @@ func FuzzHandler(f *testing.F) {
 
 	var isReady atomic.Bool
 	isReady.Store(true)
-	router := setupRouter(&isReady)
+	// Instrumented like in production, so the metrics middleware is fuzzed too.
+	router := newHTTPMetrics().instrument(setupRouter(&isReady))
 
 	f.Fuzz(func(t *testing.T, method, target string) {
 		raw := method + " " + target + " HTTP/1.1\r\nHost: example.com\r\n\r\n"

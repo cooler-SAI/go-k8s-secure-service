@@ -37,6 +37,7 @@ COPY --from=builder --chown=65532:65532 /out/server /server
 
 USER 65532:65532
 
-EXPOSE 8080
+# 8080: application traffic; 9090: Prometheus /metrics (internal only).
+EXPOSE 8080 9090
 
 ENTRYPOINT ["/server"]

@@ -4,14 +4,14 @@
 [![Security Scan (Trivy)](https://github.com/cooler-SAI/go-k8s-secure-service/actions/workflows/trivy.yml/badge.svg)](https://github.com/cooler-SAI/go-k8s-secure-service/actions/workflows/trivy.yml)
 ![Go Version](https://img.shields.io/badge/Go-1.27.3-00ADD8?logo=go)
 ![Tests](https://img.shields.io/badge/tests-passing-brightgreen)
-![Coverage](https://img.shields.io/badge/coverage-67.2%25-brightgreen)
+![Coverage](https://img.shields.io/badge/coverage-79.4%25-brightgreen)
 [![Release](https://img.shields.io/github/v/release/cooler-SAI/go-k8s-secure-service?sort=semver)](https://github.com/cooler-SAI/go-k8s-secure-service/releases/latest)
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/cooler-SAI/go-k8s-secure-service/badge)](https://scorecard.dev/viewer/?uri=github.com/cooler-SAI/go-k8s-secure-service)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 A lightweight, secure Go HTTP service designed for containerized deployment and orchestration in Kubernetes environments.
 
-**Contents:** [Status](#project-status) · [Overview](#overview) · [HTTP API](#http-api) · [Getting Started](#getting-started) · [Logging](#logging) · [Kubernetes](#kubernetes-integration) · [CI/CD](#cicd-pipelines) · [Troubleshooting](#troubleshooting) · [Roadmap](#roadmap--security-hardening) · [Security](#security-info)
+**Contents:** [Status](#project-status) · [Overview](#overview) · [HTTP API](#http-api) · [Getting Started](#getting-started) · [Logging](#logging) · [Metrics](#metrics) · [Kubernetes](#kubernetes-integration) · [CI/CD](#cicd-pipelines) · [Troubleshooting](#troubleshooting) · [Roadmap](#roadmap--security-hardening) · [Security](#security-info)
 
 ---
 
@@ -20,9 +20,10 @@ A lightweight, secure Go HTTP service designed for containerized deployment and 
 | Metric / Aspect | Status | Details |
 | :--- | :--- | :--- |
 | **Development Lifecycle** | **Stable / Production-Ready Baseline** | Core microservice architecture, Kubernetes orchestration manifests, and security hardening are complete. |
-| **Build & Test Suite** | **Passing (100%)** | Unit and integration tests verify handlers, routing, server timeout settings, and shutdown lifecycle with **67.2%** statement coverage. Race detection runs in CI. |
+| **Build & Test Suite** | **Passing (100%)** | Unit and integration tests verify handlers, routing, server timeout settings, metrics instrumentation, and shutdown lifecycle with **79.4%** statement coverage. Race detection runs in CI. |
 | **Security Scanning** | **Verified (Trivy SARIF)** | Automated weekly and PR/push scans (Trivy, plus CodeQL static analysis of the Go code) covering repository dependencies, container image, secret detection, and IaC/Kubernetes configurations (`CRITICAL,HIGH` threshold). |
-| **Dependencies** | **Minimal (one direct)** | Built on the Go standard library (`net/http`, `os/signal`, `sync/atomic`) plus a single direct dependency, [`zerolog`](https://github.com/rs/zerolog), for structured logging. Dependencies are scanned by Trivy. |
+| **Dependencies** | **Minimal (one direct)** | Built on the Go standard library (`net/http`, `os/signal`, `sync/atomic`) plus a single direct dependency, [`zerolog`](https://github.com/rs/zerolog), for structured logging. Prometheus metrics are implemented without `client_golang`. Dependencies are scanned by Trivy. |
+| **Observability** | **Prometheus RED Metrics** | Request rate, errors and duration exposed at `/metrics` on a separate internal port (`:9090`) that is not part of the Service or Ingress; NetworkPolicy admits only the `monitoring` namespace. |
 | **Container Hardening** | **Distroless Non-Root (`65532:65532`)** | Multi-stage build (`golang:1.27.3-alpine` builder) deploying to `gcr.io/distroless/static-debian13:nonroot` with read-only rootfs and dropped Linux capabilities. |
 | **Kubernetes Compliance** | **Production Baseline Manifests** | Hardened `Deployment` (probes, non-root `SecurityContext`, `GOMEMLIMIT`), `ClusterIP Service`, `PodDisruptionBudget`, least-privilege `NetworkPolicy` (default deny egress, restricted ingress), and CEL-based Kyverno `ValidatingPolicy`/`ImageValidatingPolicy` rules (non-root, non-privileged, probes, resource limits, image signature). |
 | **CI/CD Automation** | **Active (GitHub Actions)** | Continuous integration enforcing formatting (`gofmt`), code vet (`go vet`), test suite with race detector, static binary build verification, offline Kyverno policy tests, a kind E2E smoke test under the `restricted` Pod Security profile with Kyverno enforcing (including live Cosign signature verification), and Trivy security scanning. |
@@ -32,7 +33,7 @@ A lightweight, secure Go HTTP service designed for containerized deployment and 
 
 ## Overview
 
-`go-k8s-secure-service` serves as a foundation for building resilient, cloud-native microservices in Go. It provides standard HTTP endpoints, built-in Kubernetes health check probes (`/livez` and `/readyz`), graceful shutdown handling via `SIGTERM`, and an enterprise-grade security baseline for containerized environments.
+`go-k8s-secure-service` serves as a foundation for building resilient, cloud-native microservices in Go. It provides standard HTTP endpoints, built-in Kubernetes health check probes (`/livez` and `/readyz`), Prometheus RED metrics on a separate internal port, graceful shutdown handling via `SIGTERM`, and an enterprise-grade security baseline for containerized environments.
 
 ## Features
 
@@ -43,9 +44,10 @@ A lightweight, secure Go HTTP service designed for containerized deployment and 
 - **Kubernetes Readiness Probe (`/readyz`)**: Signals service readiness to receive incoming traffic (Kubernetes `readinessProbe`). Automatically switches to `503 Service Unavailable` on shutdown signals to immediately stop traffic ingress before connection draining completes.
 - **Graceful Shutdown (`SIGTERM` / `SIGINT`)**: Listens for termination signals from Kubernetes (`SIGTERM`) or process interruptions (`SIGINT`), reporting not-ready and continuing to serve for a 5-second drain delay while endpoint removal propagates, then running a graceful shutdown (`srv.Shutdown()`) with a 10-second window for in-flight requests.
 - **Hardened HTTP Timeouts**: Explicitly configures `ReadHeaderTimeout`, `ReadTimeout`, `WriteTimeout`, and `IdleTimeout` to mitigate Slowloris and connection starvation attacks.
+- **Prometheus Metrics (RED)**: Request rate, errors and duration per route at `/metrics`, served on a separate internal port (`METRICS_PORT`, default `:9090`) so it is never exposed through the Service or an Ingress. No `client_golang` dependency. See [Metrics](#metrics).
 - **Structured Logging**: Emits JSON logs to stdout with `zerolog`, ready for container log collectors (Loki, Fluent Bit, Cloud Logging, etc.). `net/http` internal errors go through the same handler.
 - **Hardened Container Image**: Uses a multi-stage build and a minimal distroless runtime, runs as a non-root user, and builds a static binary.
-- **Comprehensive Unit Tests**: High-coverage test suite verifying handlers, routing, server timeout settings, and shutdown lifecycle.
+- **Comprehensive Unit Tests**: High-coverage test suite verifying handlers, routing, metrics, server timeout settings, and shutdown lifecycle.
 
 ---
 
@@ -63,6 +65,15 @@ All responses are `text/plain`. Every route accepts `GET` and `HEAD` only.
 
 `/livez` intentionally stays `200` during shutdown, so Kubernetes does not
 restart a pod that is draining.
+
+The metrics server listens on its own port (`METRICS_PORT`, default `:9090`)
+and serves a single route:
+
+| Endpoint | Purpose | Normal response | Other responses |
+| :--- | :--- | :--- | :--- |
+| `GET :9090/metrics` | Prometheus scrape target | `200` Prometheus text format (`text/plain; version=0.0.4`) | `404` for other paths, `405` for other methods |
+
+`/metrics` is not served on the traffic port: `GET :8080/metrics` returns `404`.
 
 ---
 
@@ -99,6 +110,8 @@ go-k8s-secure-service/
 ├── SECURITY.md         # Security policy and vulnerability reporting
 ├── main.go             # Application entry point, server configuration, and HTTP handlers
 ├── main_test.go        # Unit and integration test suite
+├── metrics.go          # Prometheus RED metrics middleware and /metrics exposition (stdlib only)
+├── metrics_test.go     # Metrics, histogram and label-cardinality tests
 ├── trivy.yaml          # Shared Trivy scanner configuration
 └── README.md           # Project documentation
 ```
@@ -123,21 +136,24 @@ go-k8s-secure-service/
 
 2. Run the application directly:
    ```bash
-   go run main.go
+   go run .
    ```
 
-3. The server will start listening on port `:8080` (or the port specified by `$PORT`):
+3. The service starts listening for traffic on `:8080` (or `$PORT`) and for
+   Prometheus scrapes on `:9090` (or `$METRICS_PORT`):
    ```text
-   {"level":"info","addr":"[::]:8080","time":"2026-10-16T01:42:19+03:00","message":"server starting"}
+   {"level":"info","server":"metrics","addr":"[::]:9090","time":"2026-11-05T22:48:55+03:00","message":"server starting"}
+   {"level":"info","server":"http","addr":"[::]:8080","time":"2026-11-05T22:48:55+03:00","message":"server starting"}
    ```
 
 ### Configuration and Environment Variables
 
-The service supports configuring the listen port through the standard `PORT` environment variable. Operational timeouts and shutdown intervals use production-tuned defaults defined in `main.go`.
+The service supports configuring the traffic and metrics listen ports through environment variables. Operational timeouts and shutdown intervals use production-tuned defaults defined in `main.go`.
 
 | Setting | Configuration | Default | Description |
 | --- | --- | --- | --- |
 | Listen port | `PORT` env var | `:8080` | Binds the HTTP server to the specified port on all network interfaces (e.g., `PORT=8080` or `PORT=:8080`). |
+| Metrics port | `METRICS_PORT` env var | `:9090` | Binds the internal metrics server (`/metrics` only). Must differ from `PORT`. |
 | Read-header timeout | Fixed (`main.go`) | 5 seconds | Limits the time allowed to read request headers. |
 | Read timeout | Fixed (`main.go`) | 10 seconds | Limits the time allowed to read the full request. |
 | Write timeout | Fixed (`main.go`) | 10 seconds | Limits the time allowed to write a response. |
@@ -146,8 +162,8 @@ The service supports configuring the listen port through the standard `PORT` env
 | Shutdown timeout | Fixed (`main.go`) | 10 seconds | Maximum time allowed for in-flight requests to finish once the listener is closed. |
 
 To change the timeout settings, update the corresponding server configuration in
-`main.go`. The Kubernetes container port and probe ports should match the
-configured listen port.
+`main.go`; both servers use the same timeouts. The Kubernetes container ports,
+probes and Prometheus annotations should match the configured ports.
 
 ### Running Tests
 
@@ -159,7 +175,7 @@ go test -v -cover ./...
 
 The router is also covered by a native Go fuzz test (`FuzzHandler`) that sends
 arbitrary methods and request targets through `net/http`'s request parser into
-the router and asserts that it never panics, never answers with a 5xx, and
+the metrics-instrumented router and asserts that it never panics, never answers with a 5xx, and
 only returns `200` for the known paths with `GET`/`HEAD`. Its seed corpus runs
 with the normal test suite; to fuzz for a while:
 
@@ -201,6 +217,7 @@ docker run --rm \
   --cap-drop=ALL \
   --security-opt=no-new-privileges \
   -p 8080:8080 \
+  -p 9090:9090 \
   go-k8s-secure-service:local
 ```
 
@@ -236,6 +253,13 @@ adding build caches to the final image.
   curl -i -X POST http://localhost:8080/  # HTTP/1.1 405 Method Not Allowed, Allow: GET, HEAD
   ```
 
+- **Metrics (internal port only)**:
+  ```bash
+  curl http://localhost:9090/metrics
+  # Output: http_requests_total{method="GET",route="/",code="200"} 1 ...
+  curl -i http://localhost:8080/metrics   # HTTP/1.1 404 Not Found
+  ```
+
 ---
 
 ## Logging
@@ -246,7 +270,8 @@ The service writes one JSON object per line to stdout using
 `SIGTERM` shutdown looks like this:
 
 ```text
-{"level":"info","addr":"[::]:8080","time":"2026-10-16T01:42:19+03:00","message":"server starting"}
+{"level":"info","server":"metrics","addr":"[::]:9090","time":"2026-10-16T01:42:19+03:00","message":"server starting"}
+{"level":"info","server":"http","addr":"[::]:8080","time":"2026-10-16T01:42:19+03:00","message":"server starting"}
 {"level":"info","drain_delay":"5s","time":"2026-10-16T01:45:02+03:00","message":"shutdown signal received, reporting not-ready and draining"}
 {"level":"info","shutdown_timeout":"10s","time":"2026-10-16T01:45:07+03:00","message":"drain delay elapsed, shutting down HTTP server"}
 {"level":"info","time":"2026-10-16T01:45:07+03:00","message":"server gracefully stopped"}
@@ -258,6 +283,76 @@ or shut down cleanly, it logs `server terminated with error` and exits with
 code `1`.
 
 To follow logs in a cluster, run `kubectl logs -f deploy/go-k8s-secure-service`.
+
+---
+
+## Metrics
+
+The service exposes RED metrics (Rate, Errors, Duration) in the Prometheus
+text format at `/metrics` on the **internal metrics port** (`:9090`). The
+traffic port (`:8080`) does not serve it, the Service lists only the traffic
+port, and the NetworkPolicy admits the metrics port only from the
+`monitoring` namespace, so metrics never leak through an Ingress.
+
+| Metric | Type | Labels | Meaning |
+| :--- | :--- | :--- | :--- |
+| `http_requests_total` | counter | `method`, `route`, `code` | Requests served: **Rate**, and **Errors** via `code=~"5.."` |
+| `http_request_duration_seconds` | histogram | `method`, `route` | Request latency (**Duration**), Prometheus default buckets 5ms–10s |
+| `http_requests_in_flight` | gauge | — | Requests currently being served |
+
+Labels have bounded cardinality, so clients cannot create unlimited series:
+
+- `route` is the matched route pattern (`/`, `/livez`, `/readyz`), never the
+  raw path; anything that matches no route (404, 405) is `unmatched`.
+- `method` is one of the standard HTTP methods; anything else is `OTHER`.
+
+The instrumentation is a small standard-library middleware
+([`metrics.go`](metrics.go)) rather than `prometheus/client_golang`, which would
+add several transitive modules (protobuf, procfs, ...) to the image and to the
+Trivy scan. It
+exports only the HTTP metrics above, not Go runtime (`go_*`) or `process_*`
+metrics.
+
+Example PromQL queries:
+
+```promql
+# Rate: requests per second by route
+sum by (route) (rate(http_requests_total[5m]))
+
+# Errors: share of 5xx responses
+sum(rate(http_requests_total{code=~"5.."}[5m])) / sum(rate(http_requests_total[5m]))
+
+# Duration: p99 latency by route
+histogram_quantile(0.99, sum by (le, route) (rate(http_request_duration_seconds_bucket[5m])))
+```
+
+Probe traffic (`/livez`, `/readyz`) is counted under its own routes; filter it
+out with `route!~"/livez|/readyz"` when you only want user traffic.
+
+### Scraping in Kubernetes
+
+The pod template carries the common `prometheus.io/scrape`, `prometheus.io/port`
+and `prometheus.io/path` annotations for annotation-based discovery. With the
+Prometheus Operator, scrape the named `metrics` container port with a
+`PodMonitor` (pods are scraped directly, because the Service intentionally has
+no metrics port):
+
+```yaml
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: go-k8s-secure-service
+spec:
+  selector:
+    matchLabels:
+      app: go-k8s-secure-service
+  podMetricsEndpoints:
+    - port: metrics
+      path: /metrics
+```
+
+If Prometheus runs in a namespace other than `monitoring`, update the metrics
+rule in [`k8s/networkpolicy.yaml`](k8s/networkpolicy.yaml).
 
 ---
 
@@ -285,15 +380,19 @@ The manifests live in [`k8s/`](k8s/):
   filesystem, drops Linux capabilities, sets resource requests and limits,
   configures the `/livez` and `/readyz` probes, and sets `GOMEMLIMIT` to ~90%
   of the memory limit so the Go GC works harder before the container is
-  OOM-killed.
+  OOM-killed. It declares two named ports, `http` (`8080`) and `metrics`
+  (`9090`), and Prometheus scrape annotations.
 - [`service.yaml`](k8s/service.yaml): a `ClusterIP` Service routing port `80`
-  to the container's named `http` port (`8080`).
+  to the container's named `http` port (`8080`). The `metrics` port is
+  deliberately left off, so an Ingress or Gateway pointing at this Service
+  can never reach `/metrics`.
 - [`pdb.yaml`](k8s/pdb.yaml): a `PodDisruptionBudget` with `minAvailable: 1`,
   so node drains and cluster upgrades never evict both replicas at once.
 - [`networkpolicy.yaml`](k8s/networkpolicy.yaml): default-deny for the
-  service's pods. Ingress is allowed only on the `http` port, from pods in the
+  service's pods. Ingress is allowed on the `http` port from pods in the
   same namespace and from the `ingress-nginx` namespace (change this to match
-  your ingress controller or Gateway). All egress is denied, since the service
+  your ingress controller or Gateway), and on the `metrics` port only from the
+  `monitoring` namespace (change this to where Prometheus runs). All egress is denied, since the service
   makes no outbound calls. NetworkPolicy is enforced only if your CNI supports
   it (e.g. Calico, Cilium).
 - [`policies/`](k8s/policies/): CEL-based Kyverno policies
@@ -338,7 +437,9 @@ The manifests live in [`k8s/`](k8s/):
 enforces the Pod Security `restricted` profile
 ([`e2e/namespace.yaml`](e2e/namespace.yaml)), waits for both pods to become
 Ready, and calls `/`, `/livez`, `/readyz`, an unknown path (404) and a `POST`
-(405) through `kubectl port-forward`. CI runs it on a single-node
+(405) through `kubectl port-forward`. It also checks that `/metrics` returns
+404 through the Service and that the Service does not expose the metrics port,
+then scrapes a pod's `metrics` port for the RED metric families. CI runs it on a single-node
 [kind](https://kind.sigs.k8s.io/) cluster on every push and PR, with Kyverno
 and the policies in [`k8s/policies/`](k8s/policies/) installed, so the
 Deployment is also admitted under them.
@@ -437,11 +538,14 @@ Published releases are listed on the
 | :--- | :--- |
 | `ErrImagePull` / `ImagePullBackOff` on kind or a local cluster | The cluster nodes don't have the local image. Run `kind load docker-image go-k8s-secure-service:v1.0.0 --name <cluster>`, or deploy the GHCR image ([above](#deploying-a-signed-release-image)). |
 | Pods rejected by admission with a Kyverno message | A manifest change broke a policy (root user, privileged, missing probes or limits), or a GHCR image is unsigned. Run `kyverno test k8s/policies/tests` locally to reproduce. |
+| Prometheus target down / scrape timeouts | The NetworkPolicy admits the metrics port only from the `monitoring` namespace. Change the namespace in `k8s/networkpolicy.yaml` to where Prometheus runs, and scrape the pod's `metrics` port (`9090`), not the Service. |
+| `/metrics` returns `404` | You are calling the traffic port (`8080`) or the Service. Metrics are only on the pod's metrics port: `kubectl port-forward deploy/go-k8s-secure-service 9090:metrics`. |
 | Service unreachable from another namespace | The NetworkPolicy allows ingress only from the same namespace and `ingress-nginx`. Add your client or ingress namespace to `k8s/networkpolicy.yaml`. |
 | `/readyz` returns `503 Not Ready` | Expected while the pod drains after `SIGTERM`. Kubernetes removes the pod from endpoints. |
 | Pod `OOMKilled` | The 64Mi memory limit is too low for your load. Raise `resources.limits.memory` and keep `GOMEMLIMIT` at ~90% of it. |
 | Pod `SIGKILL`ed before draining finishes | `terminationGracePeriodSeconds` must exceed drain delay + shutdown timeout (5s + 10s). |
-| `failed to listen on :8080` | The port is already in use. Set another one, e.g. `PORT=9090 go run main.go`, and update the container port and probes to match. |
+| `failed to listen on :8080` | The port is already in use. Set another one, e.g. `PORT=8081 go run .`, and update the container port and probes to match. |
+| `failed to listen on :9090 for metrics` | The metrics port is in use (or equals `PORT`). Set another one, e.g. `METRICS_PORT=9091 go run .`, and update the `metrics` container port and `prometheus.io/port` annotation. |
 
 ---
 
@@ -466,6 +570,7 @@ Published releases are listed on the
 - [x] **Static Analysis (CodeQL)**: CodeQL scans the Go code on every push and PR and weekly, reporting to GitHub Code Scanning.
 - [x] **Security Policy**: [`SECURITY.md`](SECURITY.md) with private vulnerability reporting.
 - [x] **Signed Releases**: GitHub Releases ship SBOMs with keyless Sigstore bundles.
+- [x] **Prometheus Metrics (RED)**: Request rate, errors and duration on a separate internal metrics port (`:9090`), kept off the Service and Ingress and restricted by NetworkPolicy, without adding `client_golang`.
 
 ---
 

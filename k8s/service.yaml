@@ -6,6 +6,8 @@ metadata:
     app: go-k8s-secure-service
 spec:
   # Cluster-internal only; expose externally through an Ingress or Gateway.
+  # Only the traffic port is listed: the metrics port (9090) stays off the
+  # Service so an Ingress pointing here can never reach /metrics.
   type: ClusterIP
   selector:
     app: go-k8s-secure-service
