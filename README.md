@@ -5,12 +5,13 @@
 ![Go Version](https://img.shields.io/badge/Go-1.27.3-00ADD8?logo=go)
 ![Tests](https://img.shields.io/badge/tests-passing-brightgreen)
 ![Coverage](https://img.shields.io/badge/coverage-67.2%25-brightgreen)
+[![Release](https://img.shields.io/github/v/release/cooler-SAI/go-k8s-secure-service?sort=semver)](https://github.com/cooler-SAI/go-k8s-secure-service/releases/latest)
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/cooler-SAI/go-k8s-secure-service/badge)](https://scorecard.dev/viewer/?uri=github.com/cooler-SAI/go-k8s-secure-service)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 A lightweight, secure Go HTTP service designed for containerized deployment and orchestration in Kubernetes environments.
 
-**Contents:** [Status](#project-status) · [Overview](#overview) · [HTTP API](#http-api) · [Getting Started](#getting-started) · [Logging](#logging) · [Kubernetes](#kubernetes-integration) · [CI/CD](#cicd-pipelines) · [Troubleshooting](#troubleshooting) · [Roadmap](#roadmap--security-hardening) · [Security](#security)
+**Contents:** [Status](#project-status) · [Overview](#overview) · [HTTP API](#http-api) · [Getting Started](#getting-started) · [Logging](#logging) · [Kubernetes](#kubernetes-integration) · [CI/CD](#cicd-pipelines) · [Troubleshooting](#troubleshooting) · [Roadmap](#roadmap--security-hardening) · [Security](#security-info)
 
 ---
 
@@ -70,13 +71,13 @@ restart a pod that is draining.
 ```text
 go-k8s-secure-service/
 ├── .github/
-│   └── dependabot.yml  # Weekly updates for Go modules, Actions and Docker images
-├── .github/workflows/
-│   ├── ci.yml          # gofmt, vet, race-enabled tests, build, Kyverno policy tests, kind E2E
-│   ├── trivy.yml       # Trivy repo and container image scans, SBOM generation
-│   ├── scorecard.yml   # OpenSSF Scorecard supply-chain analysis
-│   ├── codeql.yml      # CodeQL static analysis (Go)
-│   └── release.yml     # Tag release: GHCR push, SBOMs, keyless Cosign signing
+│   ├── dependabot.yml  # Weekly updates for Go modules, Actions and Docker images
+│   └── workflows/
+│       ├── ci.yml          # gofmt, vet, race-enabled tests, build, Kyverno policy tests, kind E2E
+│       ├── trivy.yml       # Trivy repo and container image scans, SBOM generation
+│       ├── scorecard.yml   # OpenSSF Scorecard supply-chain analysis
+│       ├── codeql.yml      # CodeQL static analysis (Go)
+│       └── release.yml     # Tag release: GHCR push, SBOMs, keyless Cosign signing, GitHub Release
 ├── .idea/              # IDE configuration
 ├── e2e/
 │   ├── namespace.yaml     # Namespace enforcing the restricted Pod Security profile
@@ -87,7 +88,7 @@ go-k8s-secure-service/
 │   ├── service.yaml       # ClusterIP Service exposing the HTTP port
 │   ├── pdb.yaml           # PodDisruptionBudget keeping a replica up during disruptions
 │   ├── networkpolicy.yaml # Default-deny NetworkPolicy allowing only HTTP ingress
-│   └── policies/          # Kyverno ClusterPolicies and offline tests (tests/)
+│   └── policies/          # CEL-based Kyverno ValidatingPolicy/ImageValidatingPolicy and offline tests (tests/)
 ├── .aiignore           # AI tool ignore rules
 ├── .gitignore          # Git ignore rules
 ├── .dockerignore       # Excludes development files from the build context
@@ -324,7 +325,7 @@ The manifests live in [`k8s/`](k8s/):
   (`*.sigstore.json`) for each of them (`cosign verify-blob --bundle`).
 - **Verify a signature manually**:
   ```bash
-  cosign verify ghcr.io/cooler-sai/go-k8s-secure-service:v1.0.0 \
+  cosign verify ghcr.io/cooler-sai/go-k8s-secure-service:v1.0.6 \
     --certificate-oidc-issuer https://token.actions.githubusercontent.com \
     --certificate-identity-regexp '^https://github\.com/cooler-SAI/go-k8s-secure-service/\.github/workflows/release\.yml@refs/tags/v.*$'
   ```
@@ -384,7 +385,7 @@ the signed image from GHCR, point the Deployment at a release tag:
 ```bash
 kubectl apply -f k8s/
 kubectl set image deployment/go-k8s-secure-service \
-  server=ghcr.io/cooler-sai/go-k8s-secure-service:v1.0.0
+  server=ghcr.io/cooler-sai/go-k8s-secure-service:v1.0.6
 kubectl rollout status deployment/go-k8s-secure-service
 ```
 
@@ -415,12 +416,18 @@ Dependabot ([`.github/dependabot.yml`](.github/dependabot.yml)) opens weekly
 update PRs for Go modules, GitHub Actions and Docker base images. All actions
 and base images are pinned by SHA/digest.
 
-To cut a release:
+To cut a release, push an annotated tag from an up-to-date `main` (changes
+reach `main` only through pull requests). The release workflow creates the
+GitHub Release itself, so don't create it by hand:
 
 ```bash
-git tag v1.0.1
-git push origin v1.0.1
+git switch main && git pull --ff-only
+git tag -a v1.0.7 -m "v1.0.7"
+git push origin v1.0.7
 ```
+
+Published releases are listed on the
+[Releases page](https://github.com/cooler-SAI/go-k8s-secure-service/releases).
 
 ---
 
