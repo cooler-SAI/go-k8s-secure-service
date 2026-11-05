@@ -14,7 +14,7 @@ spec:
     - Ingress
     - Egress
   ingress:
-    # Only the HTTP port is reachable, and only from:
+    # The HTTP port is reachable only from:
     #   - pods in the same namespace (e.g. other services calling it), and
     #   - the ingress controller's namespace.
     # Adjust the namespace name to match your ingress controller or Gateway.
@@ -28,6 +28,15 @@ spec:
       ports:
         - protocol: TCP
           port: http
+    # The metrics port is reachable only from the monitoring namespace
+    # (Prometheus). Adjust the namespace name to match your setup.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+      ports:
+        - protocol: TCP
+          port: metrics
   # No egress rules: the service makes no outbound calls (not even DNS),
   # so all egress is denied. Add explicit rules here if that changes.
   egress: []

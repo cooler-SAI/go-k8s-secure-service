@@ -13,6 +13,12 @@ spec:
     metadata:
       labels:
         app: go-k8s-secure-service
+      # For Prometheus setups that discover pods by annotation. With the
+      # Prometheus Operator, use a PodMonitor on the "metrics" port instead.
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9090"
+        prometheus.io/path: /metrics
     spec:
       terminationGracePeriodSeconds: 30
       automountServiceAccountToken: false
@@ -31,6 +37,10 @@ spec:
           ports:
             - containerPort: 8080
               name: http
+            # Prometheus /metrics. Deliberately not part of the Service, so it
+            # is never reachable through the Ingress.
+            - containerPort: 9090
+              name: metrics
           env:
             # Soft memory limit for the Go GC, ~90% of limits.memory (64Mi),
             # so the runtime collects harder before the kernel OOM-kills it.

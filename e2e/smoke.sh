@@ -9,11 +9,14 @@ set -euo pipefail
 
 NAMESPACE=e2e
 LOCAL_PORT="${LOCAL_PORT:-18080}"
+METRICS_LOCAL_PORT="${METRICS_LOCAL_PORT:-19090}"
 cd "$(dirname "$0")/.."
 
 pf_pid=""
+mpf_pid=""
 cleanup() {
   [ -n "$pf_pid" ] && kill "$pf_pid" 2>/dev/null || true
+  [ -n "$mpf_pid" ] && kill "$mpf_pid" 2>/dev/null || true
 }
 dump_state() {
   echo "--- smoke test failed, cluster state ---"
@@ -72,5 +75,35 @@ check GET  /livez   200 "OK"
 check GET  /readyz  200 "OK"
 check GET  /missing 404
 check POST /        405
+# /metrics lives on the internal metrics port only, never on the Service.
+check GET  /metrics 404
+
+if kubectl -n "$NAMESPACE" get svc go-k8s-secure-service   -o jsonpath='{.spec.ports[*].targetPort}' | grep -qw metrics; then
+  echo "FAIL Service exposes the metrics port" >&2
+  exit 1
+fi
+
+# Scrape one pod directly on its named metrics port, as Prometheus would.
+kubectl -n "$NAMESPACE" port-forward deploy/go-k8s-secure-service "${METRICS_LOCAL_PORT}:metrics" >/dev/null 2>&1 &
+mpf_pid=$!
+metrics=""
+for _ in $(seq 1 30); do
+  if metrics=$(curl -fs "http://127.0.0.1:${METRICS_LOCAL_PORT}/metrics"); then break; fi
+  sleep 1
+done
+for want in   '# TYPE http_requests_total counter'   '# TYPE http_request_duration_seconds histogram'   '# TYPE http_requests_in_flight gauge'; do
+  if ! grep -qxF "$want" <<<"$metrics"; then
+    echo "FAIL GET :metrics/metrics: missing '$want'" >&2
+    echo "$metrics" >&2
+    exit 1
+  fi
+done
+# Kubelet probes hit every pod, so this series exists whichever pod we reached.
+if ! grep -q '^http_requests_total{method="GET",route="/readyz",code="200"} [1-9]' <<<"$metrics"; then
+  echo "FAIL GET :metrics/metrics: no /readyz requests counted" >&2
+  echo "$metrics" >&2
+  exit 1
+fi
+echo "ok   GET :metrics/metrics -> RED metrics exposed"
 
 echo "E2E smoke test passed"
