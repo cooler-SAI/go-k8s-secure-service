@@ -389,12 +389,38 @@ propagation in both directions:
   `traceparent` into the outgoing request, so the downstream service
   continues the same trace. The service makes no outbound calls today; use this
   client for any you add, and build requests with the incoming request's
-  context:
+  context, as in this example handler:
 
-  ```go
-  req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, url, nil)
-  resp, err := client.Do(req) // client := newOutboundClient(tr)
-  ```
+```go
+package main
+
+import (
+	"io"
+	"net/http"
+)
+
+// proxyHandler calls a downstream service within the incoming request's
+// trace. Create the client once at startup: client := newOutboundClient(tr).
+func proxyHandler(client *http.Client, downstreamURL string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		// r.Context() carries the server span, so the client span becomes
+		// its child and traceparent is injected into the outgoing request.
+		req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, downstreamURL, nil)
+		if err != nil {
+			http.Error(w, "bad downstream URL", http.StatusInternalServerError)
+			return
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			http.Error(w, "downstream unavailable", http.StatusBadGateway)
+			return
+		}
+		defer resp.Body.Close()
+		w.WriteHeader(resp.StatusCode)
+		_, _ = io.Copy(w, resp.Body)
+	}
+}
+```
 
 A request from an upstream service therefore produces one connected trace:
 
