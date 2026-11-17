@@ -33,6 +33,11 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 # =========================================================
 FROM gcr.io/distroless/static-debian13:nonroot@sha256:25ac8f0c3b2334a9eb05452266bd4697864a8c8ef0ef71e5e6480d7f92868329
 
+# OCI metadata. GHCR uses image.source to link the package to this repository.
+LABEL org.opencontainers.image.source="https://github.com/cooler-SAI/go-k8s-secure-service" \
+      org.opencontainers.image.description="Hardened Go HTTP service for Kubernetes" \
+      org.opencontainers.image.licenses="MIT"
+
 COPY --from=builder --chown=65532:65532 /out/server /server
 
 USER 65532:65532

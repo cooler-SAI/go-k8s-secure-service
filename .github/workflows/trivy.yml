@@ -11,6 +11,13 @@ on:
 permissions:
   contents: read
 
+# One run per pull request: a new push cancels the run for the previous
+# commit. Other runs (main, schedule) get a unique group and never wait or
+# get cancelled.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 # All third-party actions are pinned to full commit SHAs so a moved or
 # compromised tag cannot inject code into a job holding security-events: write.
 
@@ -18,6 +25,7 @@ jobs:
   scan-repo:
     name: Trivy Repo Scan (deps, IaC, secrets)
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     permissions:
       contents: read
       security-events: write # Required for uploading SARIF to GitHub Code Scanning
@@ -51,6 +59,7 @@ jobs:
   scan-image:
     name: Trivy Image Scan
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       contents: read
       security-events: write # Required for uploading SARIF to GitHub Code Scanning

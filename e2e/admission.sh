@@ -12,7 +12,7 @@ set -euo pipefail
 NAMESPACE=admission-e2e
 # Any image signed by .github/workflows/release.yml on a v* tag works. Pinned
 # by digest so the test does not depend on a mutable tag.
-SIGNED_IMAGE="${SIGNED_IMAGE:-ghcr.io/cooler-sai/go-k8s-secure-service:v1.0.3@sha256:3c413a3bdd375ba3a3fcc84d2cf87d6c58ac66f71dab1b510257784b17fe5ee2}"
+SIGNED_IMAGE="${SIGNED_IMAGE:-ghcr.io/cooler-sai/go-k8s-secure-service:v1.0.11@sha256:e4110482c6e8949eedae622a70544f4e0a68a1b8c6466183114e6e56e83c1f2d}"
 cd "$(dirname "$0")/.."
 
 workdir=$(mktemp -d)
