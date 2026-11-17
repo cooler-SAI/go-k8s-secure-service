@@ -93,7 +93,6 @@ go-k8s-secure-service/
 │       ├── scorecard.yml   # OpenSSF Scorecard supply-chain analysis
 │       ├── codeql.yml      # CodeQL static analysis (Go)
 │       └── release.yml     # Tag release: GHCR push, SBOMs, keyless Cosign signing, GitHub Release
-├── .idea/              # IDE configuration
 ├── e2e/
 │   ├── namespace.yaml     # Namespace enforcing the restricted Pod Security profile
 │   ├── smoke.sh           # Deploys to a cluster and checks endpoints via port-forward
@@ -103,10 +102,15 @@ go-k8s-secure-service/
 │   ├── service.yaml       # ClusterIP Service exposing the HTTP port
 │   ├── pdb.yaml           # PodDisruptionBudget keeping a replica up during disruptions
 │   ├── networkpolicy.yaml # Default-deny NetworkPolicy: HTTP ingress, metrics from monitoring only
-│   └── policies/          # CEL-based Kyverno ValidatingPolicy/ImageValidatingPolicy and offline tests (tests/)
-├── .aiignore           # AI tool ignore rules
+│   └── policies/          # CEL-based Kyverno policies (applied separately)
+│       ├── disallow-root-user.yaml             # ValidatingPolicy: no runAsUser 0
+│       ├── disallow-privileged-containers.yaml # ValidatingPolicy: no privileged containers
+│       ├── require-probes.yaml                 # ValidatingPolicy: liveness + readiness probes
+│       ├── require-resource-limits.yaml        # ValidatingPolicy: CPU + memory limits
+│       ├── verify-image-signature.yaml         # ImageValidatingPolicy: Cosign keyless signature
+│       └── tests/                              # Offline `kyverno test` suite and fixture pods
 ├── .gitignore          # Git ignore rules
-├── .dockerignore       # Excludes development files from the build context
+├── .dockerignore       # Limits the build context to go.mod, go.sum and the Go sources
 ├── Dockerfile          # Multi-stage hardened container build
 ├── go.mod              # Go module definition and dependencies
 ├── go.sum              # Dependency checksums
