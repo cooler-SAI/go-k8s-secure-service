@@ -219,6 +219,10 @@ there, or check in WSL.
 To scan a locally built image with the same settings, run
 `trivy image --config trivy.yaml go-k8s-secure-service:local`.
 
+`trivy.yaml` sets `exit-code: 0`, so local scans only report findings. CI
+passes `exit-code: 1` and fails the job on HIGH/CRITICAL; add `--exit-code 1`
+to get the same behaviour locally.
+
 ### Building and Running the Container
 
 Build the image from the repository root:
