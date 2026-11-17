@@ -87,6 +87,8 @@ jobs:
       # Helm chart 3.9.1 ships Kyverno v1.19.1; keep it in sync with
       # KYVERNO_VERSION in the kyverno job.
       KYVERNO_CHART_VERSION: 3.9.1
+      # Tetragon for the runtime-security test (k8s/runtime-security/).
+      TETRAGON_CHART_VERSION: 1.8.0
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -100,6 +102,8 @@ jobs:
         uses: helm/kind-action@ea822c7bf1874f08e5a491df991c228edffc3376 # v1.15.2
         with:
           cluster_name: e2e
+          # Mounts the host's /proc for Tetragon.
+          config: e2e/kind-config.yaml
 
       - name: Load image into kind
         run: kind load docker-image go-k8s-secure-service:v1.0.0 --name e2e
@@ -138,3 +142,24 @@ jobs:
       # offline.
       - name: Run admission test
         run: ./e2e/admission.sh
+
+      # Builds the runtime-security test harness (e2e/tetragon-harness).
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: Install Tetragon
+        run: |
+          helm install tetragon tetragon \
+            --repo https://helm.cilium.io \
+            --version "${TETRAGON_CHART_VERSION}" \
+            --namespace kube-system \
+            --set tetragon.hostProcPath=/procHost \
+            --wait --timeout 5m
+
+      # Applies the TracingPolicies, restarts the service under them, and
+      # checks that forbidden exec, listen, connect and system calls are
+      # killed while the service keeps running.
+      - name: Run runtime-security test
+        run: ./e2e/runtime-security.sh
