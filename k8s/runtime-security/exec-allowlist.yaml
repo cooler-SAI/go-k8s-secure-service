@@ -1,0 +1,44 @@
+# Runtime enforcement with Cilium Tetragon: the server container may execute
+# only its own binary. The distroless image has no shell and no other
+# programs, so any other execve means someone is trying to run code that is
+# not part of the image: `kubectl exec`, a binary dropped into a volume, or a
+# fileless payload from memfd_create.
+#
+# security_bprm_check runs for every execve before the new program gets
+# control. If the file being executed is not /server, the calling process is
+# killed (SIGKILL), so the new program never runs. For `kubectl exec` that is
+# the runc process starting the command, not the server itself.
+#
+# Requires Tetragon (tested with 1.8.0). Apply in the service's namespace:
+#   kubectl apply -f k8s/runtime-security/
+apiVersion: cilium.io/v1alpha1
+kind: TracingPolicyNamespaced
+metadata:
+  name: go-k8s-secure-service-exec
+spec:
+  podSelector:
+    matchLabels:
+      app: go-k8s-secure-service
+  # Only the service container; the pod's sandbox (pause) and any debug
+  # containers are not affected.
+  containerSelector:
+    matchExpressions:
+      - key: name
+        operator: In
+        values: [server]
+  kprobes:
+    - call: security_bprm_check
+      syscall: false
+      message: "Blocked execution of a binary other than /server"
+      tags: [runtime-security, process-exec]
+      args:
+        - index: 0
+          type: linux_binprm
+      selectors:
+        - matchArgs:
+            - index: 0
+              operator: NotEqual
+              values:
+                - /server
+          matchActions:
+            - action: Sigkill

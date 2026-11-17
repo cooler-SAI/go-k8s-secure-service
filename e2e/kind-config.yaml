@@ -1,0 +1,12 @@
+# Single-node kind cluster for the E2E tests.
+#
+# The host's /proc is mounted at /procHost so Tetragon (installed with
+# --set tetragon.hostProcPath=/procHost) sees the real host PIDs that its
+# eBPF programs report, not the PIDs inside the kind node container.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+nodes:
+  - role: control-plane
+    extraMounts:
+      - hostPath: /proc
+        containerPath: /procHost

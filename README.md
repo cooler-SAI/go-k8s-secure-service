@@ -10,7 +10,7 @@
 
 A lightweight, secure Go HTTP service designed for containerized deployment and orchestration in Kubernetes environments.
 
-**Contents:** [Status](#project-status) · [Overview](#overview) · [HTTP API](#http-api) · [Getting Started](#getting-started) · [Logging](#logging) · [Metrics](#metrics) · [Tracing](#tracing-opentelemetry) · [Kubernetes](#kubernetes-integration) · [CI/CD](#cicd-pipelines) · [Troubleshooting](#troubleshooting) · [Roadmap](#roadmap--security-hardening) · [Security](#security-info)
+**Contents:** [Status](#project-status) · [Overview](#overview) · [HTTP API](#http-api) · [Getting Started](#getting-started) · [Logging](#logging) · [Metrics](#metrics) · [Tracing](#tracing-opentelemetry) · [Kubernetes](#kubernetes-integration) · [Runtime Security](#runtime-security-cilium-tetragon) · [CI/CD](#cicd-pipelines) · [Troubleshooting](#troubleshooting) · [Roadmap](#roadmap--security-hardening) · [Security](#security-info)
 
 ---
 
@@ -25,6 +25,7 @@ A lightweight, secure Go HTTP service designed for containerized deployment and 
 | **Observability** | **RED Metrics + OpenTelemetry Tracing** | Request rate, errors and duration at `/metrics` on a separate internal port (`:9090`) that is not part of the Service or Ingress. Distributed tracing with W3C Trace Context (`traceparent`) propagation on incoming and outgoing requests, OTLP/HTTP export, and `trace_id`/`span_id` in request logs. |
 | **Container Hardening** | **Distroless Non-Root (`65532:65532`)** | Multi-stage build (`golang:1.27.3-alpine` builder) deploying to `gcr.io/distroless/static-debian13:nonroot` with read-only rootfs and dropped Linux capabilities. |
 | **Kubernetes Compliance** | **Production Baseline Manifests** | Hardened `Deployment` (probes, non-root `SecurityContext`, `GOMEMLIMIT`), `ClusterIP Service`, `PodDisruptionBudget`, least-privilege `NetworkPolicy` (default deny egress, restricted ingress for traffic and metrics), and CEL-based Kyverno `ValidatingPolicy`/`ImageValidatingPolicy` rules (non-root, non-privileged, probes, resource limits, image signature). |
+| **Runtime Security** | **Cilium Tetragon (eBPF) enforcement** | Three `TracingPolicyNamespaced` policies kill the server process on any `execve` other than `/server`, on 28 escape / privilege-escalation system calls, on listening outside `8080`/`9090`, and on outbound TCP other than OTLP (`4318`). Verified in CI on a kind cluster with Tetragon 1.8.0. |
 | **CI/CD Automation** | **Active (GitHub Actions)** | Continuous integration enforcing formatting (`gofmt`), module verification, code vet (`go vet`), test suite with race detector, router fuzzing, static binary build verification, offline Kyverno policy tests (checksum-verified CLI), a kind E2E smoke test under the `restricted` Pod Security profile with Kyverno enforcing (including live Cosign signature verification), and Trivy security scanning. |
 | **Supply Chain** | **SBOM + Signed Releases** | Trivy-generated SPDX/CycloneDX SBOMs, and tagged releases pushed to GHCR with keyless Cosign signatures and SBOM attestations, verified at admission by Kyverno. |
 
@@ -47,6 +48,7 @@ A lightweight, secure Go HTTP service designed for containerized deployment and 
 - **Distributed Tracing (OpenTelemetry)**: Continues the caller's trace from the W3C `traceparent` header (or starts a new one), and provides an instrumented HTTP client that injects `traceparent` into outgoing requests. Spans are exported over OTLP/HTTP when `OTEL_EXPORTER_OTLP_ENDPOINT` is set. See [Tracing](#tracing-opentelemetry).
 - **Structured Logging**: Emits JSON logs to stdout with `zerolog`, ready for container log collectors (Loki, Fluent Bit, Cloud Logging, etc.). `net/http` and OpenTelemetry internal errors go through the same logger, and request error logs carry `trace_id`/`span_id`.
 - **Hardened Container Image**: Uses a multi-stage build and a minimal distroless runtime, runs as a non-root user, and builds a static binary.
+- **Runtime Security (Tetragon)**: eBPF TracingPolicies watch the running container's processes, system calls and sockets, and kill the process on behaviour the service never shows. See [Runtime Security](#runtime-security-cilium-tetragon).
 - **Comprehensive Unit Tests**: Test suite verifying handlers, routing, metrics, end-to-end trace propagation (incoming `traceparent` → server span → client span → downstream `traceparent`), OTLP export, server timeout settings, and shutdown lifecycle.
 
 ---
@@ -95,13 +97,20 @@ go-k8s-secure-service/
 │       └── release.yml     # Tag release: GHCR push, SBOMs, keyless Cosign signing, GitHub Release
 ├── e2e/
 │   ├── namespace.yaml     # Namespace enforcing the restricted Pod Security profile
+│   ├── kind-config.yaml   # kind cluster config (mounts the host's /proc for Tetragon)
 │   ├── smoke.sh           # Deploys to a cluster and checks endpoints via port-forward
-│   └── admission.sh       # Live Kyverno admission checks, incl. Cosign signature verification
+│   ├── admission.sh       # Live Kyverno admission checks, incl. Cosign signature verification
+│   ├── runtime-security.sh # Live Tetragon enforcement checks against the TracingPolicies
+│   └── tetragon-harness/  # Test binary that runs as /server and performs forbidden actions
 ├── k8s/
 │   ├── deployment.yaml    # Hardened Deployment (security context, probes, resources, OTel env)
 │   ├── service.yaml       # ClusterIP Service exposing the HTTP port
 │   ├── pdb.yaml           # PodDisruptionBudget keeping a replica up during disruptions
 │   ├── networkpolicy.yaml # Default-deny NetworkPolicy: HTTP ingress, metrics from monitoring only
+│   ├── runtime-security/  # Cilium Tetragon TracingPolicies (applied separately)
+│   │   ├── exec-allowlist.yaml # Only /server may be executed
+│   │   ├── syscalls.yaml       # Escape / privilege-escalation system calls are killed
+│   │   └── network.yaml        # Listen only on 8080/9090, outbound TCP only to 4318
 │   └── policies/          # CEL-based Kyverno policies (applied separately)
 │       ├── disallow-root-user.yaml             # ValidatingPolicy: no runAsUser 0
 │       ├── disallow-privileged-containers.yaml # ValidatingPolicy: no privileged containers
@@ -599,7 +608,7 @@ contacts the registry. To run both locally:
 
 ```bash
 docker build -t go-k8s-secure-service:v1.0.0 .
-kind create cluster --name e2e
+kind create cluster --name e2e --config e2e/kind-config.yaml
 kind load docker-image go-k8s-secure-service:v1.0.0 --name e2e
 helm install kyverno kyverno --repo https://kyverno.github.io/kyverno/ \
   --version 3.9.1 --namespace kyverno --create-namespace --wait
@@ -643,11 +652,126 @@ curl http://localhost:8080/
 
 ---
 
+## Runtime Security (Cilium Tetragon)
+
+Admission control (Kyverno) decides what may start; the NetworkPolicy decides
+which packets may flow. Neither sees what the process does once it runs. The
+policies in [`k8s/runtime-security/`](k8s/runtime-security/) add that layer
+with [Cilium Tetragon](https://tetragon.io/): eBPF programs in the kernel
+watch the server container and kill the process (`SIGKILL`) the moment it
+does something the service never does.
+
+The service's behaviour is small and fixed, so the policies are allowlists
+written for it: one binary (`/server`), two listening ports, no outbound
+connections except optional trace export.
+
+| Policy | Kernel hook | Allowed | Killed |
+| :--- | :--- | :--- | :--- |
+| [`exec-allowlist.yaml`](k8s/runtime-security/exec-allowlist.yaml) | `security_bprm_check` (every `execve`) | executing `/server` | executing anything else, e.g. a dropped binary or a `memfd_create` payload |
+| [`syscalls.yaml`](k8s/runtime-security/syscalls.yaml) | 28 system calls | — | `ptrace`, `process_vm_readv/writev`; `mount`, `umount2`, `pivot_root`, `chroot`, `unshare`, `setns`, `open_by_handle_at`; kernel module, `kexec` and `bpf` calls; `setuid`/`setgid` family, `setgroups`, `capset`; `keyctl`, `add_key`, `request_key`, `userfaultfd` |
+| [`network.yaml`](k8s/runtime-security/network.yaml) | `inet_csk_listen_start`, `tcp_connect` | listening on `8080`/`9090`; outbound TCP to port `4318` (OTLP/HTTP) | listening on any other port (bind shell); any other outbound TCP connection (reverse shell, exfiltration) |
+
+How they are scoped and what they do:
+
+- They are `TracingPolicyNamespaced` objects: they act only in the namespace
+  they are applied to, only on pods labelled `app: go-k8s-secure-service`,
+  and only on the container named `server` (`containerSelector`). The pause
+  container and `kubectl debug` containers have other names and are not
+  selected.
+- **`kubectl exec` into the server container fails** for any command other
+  than `/server` (verified in the E2E test). The process that runc starts
+  inside the container is killed before the command runs: by the exec policy
+  when it executes the command, or earlier by the syscalls policy if runc
+  makes one of the listed calls while it sets up (both have been observed,
+  depending on kernel and runtime). The running server is not affected.
+- The action is `Sigkill`, not `Override`: it works on any kernel with BTF,
+  while `Override` needs `CONFIG_BPF_KPROBE_OVERRIDE`. The process is killed
+  before it returns to user space, but the kernel function that triggered
+  the policy has already started. For `tcp_connect` this means the first SYN
+  can still leave, so the NetworkPolicy remains the packet-level control.
+- Most of the listed system calls already fail in this container (non-root,
+  no capabilities, `RuntimeDefault` seccomp). The policies turn the attempt
+  itself into a visible event and stop the process before it tries
+  anything else. `perf_event_open` is left out because some kernels refuse a
+  kprobe on it, which would stop the whole policy from loading; seccomp
+  blocks it here anyway.
+- When a rule fires, the server process exits with code `137` and the
+  kubelet restarts the container (the Deployment's `restartPolicy` is
+  `Always`). That is the intended response: a process that tried to escape
+  is not trusted to keep serving.
+
+### Installing
+
+Tetragon runs as a DaemonSet on every node (tested with Tetragon 1.8.0, which
+needs a kernel with BTF, `/sys/kernel/btf/vmlinux`):
+
+```bash
+helm install tetragon tetragon --repo https://helm.cilium.io \
+  --version 1.8.0 --namespace kube-system --wait
+kubectl apply -f k8s/runtime-security/   # in the service's namespace, like k8s/
+kubectl -n kube-system exec ds/tetragon -c tetragon -- tetra tracingpolicy list
+```
+
+Each policy should show `STATE enabled` and `MODE enforce`. Without
+`kprobe_multi` (kernels before 5.18) every system call in `syscalls.yaml` is
+a separate kprobe, so that policy can take a minute or two to load and uses
+about 40 MB of kernel memory per namespace; newer kernels attach it in one
+step. `kubectl apply -f k8s/` does not apply these policies (no recursion),
+so clusters without Tetragon's CRDs are unaffected.
+
+Keep the policies in sync with the configuration: if you change `PORT` or
+`METRICS_PORT`, update the ports in `network.yaml`; if you export traces to a
+collector on a port other than `4318`, update `network.yaml` and the egress
+rule in `networkpolicy.yaml` together.
+
+### Watching Enforcement
+
+`NPOST` and `NENFORCE` in `tetra tracingpolicy list` count the events and
+kills per policy and namespace. To see each event with the pod, binary and
+policy name:
+
+```bash
+kubectl -n kube-system exec ds/tetragon -c tetragon -- \
+  tetra getevents -o compact -e PROCESS_KPROBE --namespace <namespace>
+```
+
+### Runtime-Security E2E Test
+
+[`e2e/runtime-security.sh`](e2e/runtime-security.sh) runs in CI after the
+smoke and admission tests, on the same kind cluster with Tetragon installed.
+It applies the policies, restarts the real Deployment under them and checks
+that the pods become Ready without restarts. It then starts pods running a
+test binary ([`e2e/tetragon-harness`](e2e/tetragon-harness/main.go)) as
+`/server` with the same labels, each performing one action:
+
+| Action | Expected |
+| :--- | :--- |
+| none (listen on `8080` only) | survives |
+| `execve("/other")` | killed (exit code `137`) |
+| listen on `7777` | killed |
+| TCP connect to the Kubernetes API (`:443`) | killed |
+| TCP connect to `127.0.0.1:4318` | survives |
+| `ptrace(PTRACE_TRACEME)` | killed |
+| `kubectl exec` into the running pod | exec fails, server keeps running |
+
+Finally it checks Tetragon's counters: every policy enforced at least once in
+the test namespace, and none fired for the real service. To run it locally
+after the smoke test (kind cluster created with
+[`e2e/kind-config.yaml`](e2e/kind-config.yaml)):
+
+```bash
+helm install tetragon tetragon --repo https://helm.cilium.io --version 1.8.0 \
+  --namespace kube-system --set tetragon.hostProcPath=/procHost --wait
+./e2e/runtime-security.sh
+```
+
+---
+
 ## CI/CD Pipelines
 
 | Workflow | Triggers | What it does |
 | :--- | :--- | :--- |
-| [`ci.yml`](.github/workflows/ci.yml) | push / PR to `main` | `gofmt` check, `go mod verify`, `go vet`, race-enabled tests with coverage, 30s of `FuzzHandler`, static build; Kyverno policy tests (CLI pinned by SHA-256); kind E2E smoke test and live Kyverno admission test |
+| [`ci.yml`](.github/workflows/ci.yml) | push / PR to `main` | `gofmt` check, `go mod verify`, `go vet`, race-enabled tests with coverage, 30s of `FuzzHandler`, static build; Kyverno policy tests (CLI pinned by SHA-256); kind E2E smoke test, live Kyverno admission test, and Tetragon runtime-security test |
 | [`trivy.yml`](.github/workflows/trivy.yml) | push / PR to `main`, weekly (Mon 06:00 UTC) | Repo scan (deps, IaC, secrets) and image scan with SARIF upload to Code Scanning; SPDX + CycloneDX SBOM artifact |
 | [`codeql.yml`](.github/workflows/codeql.yml) | push / PR to `main`, weekly (Wed 07:00 UTC) | CodeQL static analysis of the Go code |
 | [`scorecard.yml`](.github/workflows/scorecard.yml) | push to `main`, branch protection changes, weekly (Tue 06:30 UTC) | OpenSSF Scorecard supply-chain checks |
@@ -680,6 +804,9 @@ Published releases are listed on the
 | Pods rejected by admission with a Kyverno message | A manifest change broke a policy (root user, privileged, missing probes or limits), or a GHCR image is unsigned. Run `kyverno test k8s/policies/tests` locally to reproduce. |
 | Prometheus target down / scrape timeouts | The NetworkPolicy admits the metrics port only from the `monitoring` namespace. Change the namespace in `k8s/networkpolicy.yaml` to where Prometheus runs, and scrape the pod's `metrics` port (`9090`), not the Service. |
 | `/metrics` returns `404` | You are calling the traffic port (`8080`) or the Service. Metrics are only on the pod's metrics port: `kubectl port-forward deploy/go-k8s-secure-service 9090:metrics`. |
+| Server container restarts with exit code `137` | A Tetragon policy killed it. Find out which one with `tetra getevents -e PROCESS_KPROBE` ([Watching Enforcement](#watching-enforcement)). After a legitimate change (new port, new OTLP port), update [`k8s/runtime-security/network.yaml`](k8s/runtime-security/network.yaml). |
+| `kubectl exec` into the server container fails | Expected with the Tetragon policies applied. An ephemeral debug container (`kubectl debug <pod> --target=server ...`) has another name and is not selected by the policies; it must still pass Pod Security and the Kyverno policies (e.g. run as non-root). |
+| Tetragon policy stuck in `load_error` | Check `kubectl -n kube-system logs ds/tetragon -c tetragon`: usually a kernel without BTF or a system call / kernel function missing on that kernel. |
 | Service unreachable from another namespace | The NetworkPolicy allows ingress only from the same namespace and `ingress-nginx`. Add your client or ingress namespace to `k8s/networkpolicy.yaml`. |
 | `/readyz` returns `503 Not Ready` | Expected while the pod drains after `SIGTERM`. Kubernetes removes the pod from endpoints. |
 | Pod `OOMKilled` | The 64Mi memory limit is too low for your load. Raise `resources.limits.memory` and keep `GOMEMLIMIT` at ~90% of it. |
@@ -714,6 +841,7 @@ Published releases are listed on the
 - [x] **Signed Releases**: GitHub Releases ship SBOMs with keyless Sigstore bundles.
 - [x] **Distributed Tracing (OpenTelemetry)**: W3C Trace Context propagation for incoming and outgoing requests, OTLP/HTTP export, Kubernetes resource attributes, and `trace_id`/`span_id` in request logs.
 - [x] **Prometheus Metrics (RED)**: Request rate, errors and duration on a separate internal metrics port (`:9090`), kept off the Service and Ingress and restricted by NetworkPolicy, without adding `client_golang`.
+- [x] **Runtime Security (Cilium Tetragon)**: eBPF `TracingPolicyNamespaced` policies kill the server on unexpected `execve`, escape / privilege-escalation system calls, unexpected listening ports and outbound TCP; verified against a live kernel in CI.
 
 ---
 

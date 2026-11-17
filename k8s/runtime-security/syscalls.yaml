@@ -1,0 +1,74 @@
+# Runtime enforcement with Cilium Tetragon: system calls that a Go HTTP
+# server never makes kill the process. They are the building blocks of
+# container escapes and privilege escalation: debugging other processes,
+# changing mounts or namespaces, loading kernel code, and changing
+# credentials.
+#
+# Most of them already fail inside this container (non-root, all
+# capabilities dropped, RuntimeDefault seccomp). Tetragon adds detection and
+# a hard stop: the attempt itself is reported and the process is killed
+# before it can try anything else.
+#
+# Requires Tetragon (tested with 1.8.0). Apply in the service's namespace:
+#   kubectl apply -f k8s/runtime-security/
+apiVersion: cilium.io/v1alpha1
+kind: TracingPolicyNamespaced
+metadata:
+  name: go-k8s-secure-service-syscalls
+spec:
+  podSelector:
+    matchLabels:
+      app: go-k8s-secure-service
+  containerSelector:
+    matchExpressions:
+      - key: name
+        operator: In
+        values: [server]
+  lists:
+    - name: forbidden-syscalls
+      type: syscalls
+      values:
+        # Reading or modifying other processes' memory
+        - sys_ptrace
+        - sys_process_vm_readv
+        - sys_process_vm_writev
+        # Mounts, namespaces and root changes (container escape)
+        - sys_mount
+        - sys_umount # umount2(2); the kernel function is sys_umount
+        - sys_pivot_root
+        - sys_chroot
+        - sys_unshare
+        - sys_setns
+        - sys_open_by_handle_at
+        # Loading code into the kernel
+        - sys_init_module
+        - sys_finit_module
+        - sys_delete_module
+        - sys_kexec_load
+        - sys_kexec_file_load
+        - sys_bpf
+        # perf_event_open is not listed: some kernels refuse a kprobe on it,
+        # which would stop the whole policy from loading. The RuntimeDefault
+        # seccomp profile already blocks it without CAP_PERFMON/CAP_SYS_ADMIN.
+        # Changing credentials and capabilities
+        - sys_setuid
+        - sys_setgid
+        - sys_setreuid
+        - sys_setregid
+        - sys_setresuid
+        - sys_setresgid
+        - sys_setgroups
+        - sys_capset
+        # Kernel keyring and userfaultfd, common in kernel exploits
+        - sys_keyctl
+        - sys_add_key
+        - sys_request_key
+        - sys_userfaultfd
+  kprobes:
+    - call: "list:forbidden-syscalls"
+      syscall: true
+      message: "Blocked a system call the service never makes"
+      tags: [runtime-security, syscall]
+      selectors:
+        - matchActions:
+            - action: Sigkill
