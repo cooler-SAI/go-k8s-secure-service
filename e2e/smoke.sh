@@ -14,9 +14,11 @@ cd "$(dirname "$0")/.."
 
 pf_pid=""
 mpf_pid=""
+dryrun_out=$(mktemp)
 cleanup() {
   [ -n "$pf_pid" ] && kill "$pf_pid" 2>/dev/null || true
   [ -n "$mpf_pid" ] && kill "$mpf_pid" 2>/dev/null || true
+  rm -f "$dryrun_out"
 }
 dump_state() {
   echo "--- smoke test failed, cluster state ---"
@@ -31,8 +33,8 @@ kubectl apply -f e2e/namespace.yaml
 
 # A server-side dry-run against the restricted namespace fails loudly if the
 # pod template violates the profile (the live apply below would only warn).
-kubectl -n "$NAMESPACE" apply --dry-run=server -f k8s/deployment.yaml 2>&1 | tee /tmp/psa-dryrun.txt
-if grep -qi "would violate" /tmp/psa-dryrun.txt; then
+kubectl -n "$NAMESPACE" apply --dry-run=server -f k8s/deployment.yaml 2>&1 | tee "$dryrun_out"
+if grep -qi "would violate" "$dryrun_out"; then
   echo "Deployment violates the restricted Pod Security profile" >&2
   exit 1
 fi
@@ -78,7 +80,8 @@ check POST /        405
 # /metrics lives on the internal metrics port only, never on the Service.
 check GET  /metrics 404
 
-if kubectl -n "$NAMESPACE" get svc go-k8s-secure-service   -o jsonpath='{.spec.ports[*].targetPort}' | grep -qw metrics; then
+if kubectl -n "$NAMESPACE" get svc go-k8s-secure-service \
+  -o jsonpath='{.spec.ports[*].targetPort}' | grep -qw metrics; then
   echo "FAIL Service exposes the metrics port" >&2
   exit 1
 fi
@@ -91,7 +94,10 @@ for _ in $(seq 1 30); do
   if metrics=$(curl -fs "http://127.0.0.1:${METRICS_LOCAL_PORT}/metrics"); then break; fi
   sleep 1
 done
-for want in   '# TYPE http_requests_total counter'   '# TYPE http_request_duration_seconds histogram'   '# TYPE http_requests_in_flight gauge'; do
+for want in \
+  '# TYPE http_requests_total counter' \
+  '# TYPE http_request_duration_seconds histogram' \
+  '# TYPE http_requests_in_flight gauge'; do
   if ! grep -qxF "$want" <<<"$metrics"; then
     echo "FAIL GET :metrics/metrics: missing '$want'" >&2
     echo "$metrics" >&2
