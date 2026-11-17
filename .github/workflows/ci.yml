@@ -20,6 +20,7 @@ jobs:
   test:
     name: Vet, Test & Build
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -60,6 +61,7 @@ jobs:
   kyverno:
     name: Kyverno Policy Tests
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     env:
       KYVERNO_VERSION: v1.19.1
       # SHA-256 of kyverno-cli_${KYVERNO_VERSION}_linux_x86_64.tar.gz, from the
@@ -89,6 +91,7 @@ jobs:
   e2e:
     name: E2E Smoke Test (kind)
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     needs: test
     env:
       # Helm chart 3.9.1 ships Kyverno v1.19.1; keep it in sync with
