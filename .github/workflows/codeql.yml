@@ -11,6 +11,13 @@ on:
 permissions:
   contents: read
 
+# One run per pull request: a new push cancels the run for the previous
+# commit. Other runs (main, schedule) get a unique group and never wait or
+# get cancelled.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 # All third-party actions are pinned to full commit SHAs.
 
 jobs:
