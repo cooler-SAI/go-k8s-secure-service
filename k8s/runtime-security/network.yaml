@@ -1,0 +1,64 @@
+# Runtime enforcement with Cilium Tetragon: the server process may only
+# listen on its two ports and may only open outbound TCP connections to an
+# OpenTelemetry Collector (OTLP/HTTP, port 4318). Anything else kills the
+# process: a bind shell on a new port, or a reverse shell, exfiltration or
+# lateral movement over an outbound connection.
+#
+# This complements k8s/networkpolicy.yaml, which drops the packets at the
+# network level. The NetworkPolicy cannot tell which process opened a
+# socket; Tetragon acts on the process itself and reports the attempt. A
+# killed process may already have sent the first SYN, so keep the
+# NetworkPolicy as the packet-level control.
+#
+# Keep the ports in sync with PORT / METRICS_PORT (deployment.yaml) and with
+# the OTLP egress rule in networkpolicy.yaml if you change them.
+#
+# Requires Tetragon (tested with 1.8.0). Apply in the service's namespace:
+#   kubectl apply -f k8s/runtime-security/
+apiVersion: cilium.io/v1alpha1
+kind: TracingPolicyNamespaced
+metadata:
+  name: go-k8s-secure-service-network
+spec:
+  podSelector:
+    matchLabels:
+      app: go-k8s-secure-service
+  containerSelector:
+    matchExpressions:
+      - key: name
+        operator: In
+        values: [server]
+  kprobes:
+    # A TCP socket starts listening. The local port is already bound here.
+    - call: inet_csk_listen_start
+      syscall: false
+      message: "Blocked a listening socket on an unexpected port"
+      tags: [runtime-security, network]
+      args:
+        - index: 0
+          type: sock
+      selectors:
+        - matchArgs:
+            - index: 0
+              operator: NotSPort
+              values:
+                - "8080" # PORT: application traffic
+                - "9090" # METRICS_PORT: Prometheus /metrics
+          matchActions:
+            - action: Sigkill
+    # An outbound TCP connection is being opened.
+    - call: tcp_connect
+      syscall: false
+      message: "Blocked an outbound TCP connection"
+      tags: [runtime-security, network]
+      args:
+        - index: 0
+          type: sock
+      selectors:
+        - matchArgs:
+            - index: 0
+              operator: NotDPort
+              values:
+                - "4318" # OTLP/HTTP trace export
+          matchActions:
+            - action: Sigkill
