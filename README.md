@@ -678,10 +678,12 @@ How they are scoped and what they do:
   and only on the container named `server` (`containerSelector`). The pause
   container and `kubectl debug` containers have other names and are not
   selected.
-- **`kubectl exec` into the server container fails**, whatever the command.
-  The process that runc starts inside the container is killed by the
-  syscalls policy before the command runs (verified in the E2E test). The
-  running server is not affected.
+- **`kubectl exec` into the server container fails** for any command other
+  than `/server` (verified in the E2E test). The process that runc starts
+  inside the container is killed before the command runs: by the exec policy
+  when it executes the command, or earlier by the syscalls policy if runc
+  makes one of the listed calls while it sets up (both have been observed,
+  depending on kernel and runtime). The running server is not affected.
 - The action is `Sigkill`, not `Override`: it works on any kernel with BTF,
   while `Override` needs `CONFIG_BPF_KPROBE_OVERRIDE`. The process is killed
   before it returns to user space, but the kernel function that triggered
