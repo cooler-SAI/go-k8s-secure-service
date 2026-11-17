@@ -35,3 +35,6 @@ go.work.sum
 
 # Personal IDE JVM options
 goland64.exe.vmoptions
+
+# JetBrains IDE project files (per-developer, not shared)
+.idea/
