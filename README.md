@@ -532,15 +532,18 @@ The manifests live in [`k8s/`](k8s/):
   resources deny containers running as `runAsUser: 0`, deny privileged
   containers, and require liveness/readiness probes and CPU/memory limits.
   Kyverno auto-generates the same checks for Deployments, StatefulSets,
-  DaemonSets, ReplicaSets, Jobs and CronJobs. The `kube-system`,
-  `kube-public`, `kube-node-lease` and `kyverno` namespaces are excluded. They are not applied by `kubectl apply -f k8s/`; install
+  DaemonSets, ReplicaSets, Jobs and CronJobs. These four policies exclude the
+  `kube-system`, `kube-public`, `kube-node-lease` and `kyverno` namespaces.
+  None of the policies are applied by `kubectl apply -f k8s/` (it does not
+  recurse into subdirectories); install
   Kyverno and apply them with `kubectl apply -f k8s/policies/`. Policy
   tests (`kyverno test k8s/policies/tests`) run offline against fixture pods
   and `deployment.yaml`, and CI runs them on every push and PR.
   `verify-image-signature.yaml`, an `ImageValidatingPolicy`, additionally requires images from
   `ghcr.io/cooler-sai/go-k8s-secure-service` to carry a Cosign keyless
-  signature from the release workflow (see below); it only matches that
-  registry path, so locally built images are unaffected.
+  signature from the release workflow (see below). It has no namespace
+  exclusions, but it only matches that registry path, so locally built images
+  are unaffected.
 
 ### Supply Chain: SBOM and Image Signing
 
