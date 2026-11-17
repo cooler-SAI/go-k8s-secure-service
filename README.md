@@ -586,7 +586,7 @@ Deployment is also admitted under them.
 [`e2e/admission.sh`](e2e/admission.sh) then checks the policies against the
 live cluster with server-side dry-runs:
 
-- the Deployment with a signed release image from GHCR (`v1.0.3`, pinned by
+- the Deployment with a signed release image from GHCR (`v1.0.11`, pinned by
   digest; override with `SIGNED_IMAGE`) is admitted, which verifies its Cosign
   signature against Sigstore;
 - the same image is rejected when the policy expects a different signer, so
