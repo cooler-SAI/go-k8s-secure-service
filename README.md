@@ -698,7 +698,7 @@ Published releases are listed on the
 - [x] **Structured Logging**: Structured JSON logging on stdout via `zerolog`, including `net/http` internal errors.
 - [x] **Configurable Environment**: Support configuring the HTTP listen port via the standard `PORT` environment variable.
 - [x] **Containerization & Hardening**: Multi-stage distroless image, static binary, non-root runtime user, and hardened Kubernetes `SecurityContext` example.
-- [x] **Network Policy**: Least-privilege Kubernetes `NetworkPolicy`: ingress only on the HTTP port from the same namespace and the ingress controller, all egress denied.
+- [x] **Network Policy**: Least-privilege Kubernetes `NetworkPolicy`: ingress on the HTTP port only from the same namespace and the ingress controller, on the metrics port only from the `monitoring` namespace, all egress denied.
 - [x] **Admission Policies (Kyverno)**: CEL-based `ValidatingPolicy` rules (`policies.kyverno.io/v1`) for non-root, non-privileged containers, mandatory probes and resource limits, validated offline in CI with `kyverno test`.
 - [x] **SBOM & Image Signing (Cosign)**: Trivy-generated SPDX/CycloneDX SBOMs in CI, keyless Cosign signing and SBOM attestations on release, and a Kyverno policy that verifies the signature at admission.
 - [x] **E2E Smoke Test (kind)**: GitHub Actions deploys the manifests to a single-node kind cluster under the `restricted` Pod Security profile and checks the endpoints through port-forward, with Kyverno installed and a live admission test that verifies a signed release image.
