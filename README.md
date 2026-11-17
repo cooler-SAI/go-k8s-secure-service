@@ -3,7 +3,6 @@
 [![CI](https://github.com/cooler-SAI/go-k8s-secure-service/actions/workflows/ci.yml/badge.svg)](https://github.com/cooler-SAI/go-k8s-secure-service/actions/workflows/ci.yml)
 [![Security Scan (Trivy)](https://github.com/cooler-SAI/go-k8s-secure-service/actions/workflows/trivy.yml/badge.svg)](https://github.com/cooler-SAI/go-k8s-secure-service/actions/workflows/trivy.yml)
 ![Go Version](https://img.shields.io/badge/Go-1.27.3-00ADD8?logo=go)
-![Tests](https://img.shields.io/badge/tests-passing-brightgreen)
 ![Coverage](https://img.shields.io/badge/coverage-77.0%25-brightgreen)
 [![Release](https://img.shields.io/github/v/release/cooler-SAI/go-k8s-secure-service?sort=semver)](https://github.com/cooler-SAI/go-k8s-secure-service/releases/latest)
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/cooler-SAI/go-k8s-secure-service/badge)](https://scorecard.dev/viewer/?uri=github.com/cooler-SAI/go-k8s-secure-service)
@@ -20,7 +19,7 @@ A lightweight, secure Go HTTP service designed for containerized deployment and 
 | Metric / Aspect | Status | Details |
 | :--- | :--- | :--- |
 | **Development Lifecycle** | **Stable / Production-Ready Baseline** | Core microservice architecture, Kubernetes orchestration manifests, and security hardening are complete. |
-| **Build & Test Suite** | **Passing (100%)** | Unit and integration tests verify handlers, routing, server timeout settings, metrics, trace propagation, and shutdown lifecycle with **77.0%** statement coverage. Race detection runs in CI. |
+| **Build & Test Suite** | **22 tests + 1 fuzz target, 77.0% coverage** | Unit and integration tests (`main_test.go`: 8, `metrics_test.go`: 7, `tracing_test.go`: 7) verify handlers, routing, server timeout settings, metrics, trace propagation, and shutdown lifecycle; `FuzzHandler` fuzzes the router. **77.0%** statement coverage. Race detection runs in CI. |
 | **Security Scanning** | **Verified (Trivy SARIF)** | Automated weekly and PR/push scans (Trivy, plus CodeQL static analysis of the Go code) covering repository dependencies, container image, secret detection, and IaC/Kubernetes configurations (`CRITICAL,HIGH` threshold). |
 | **Dependencies** | **Small, scanned** | Go standard library plus [`zerolog`](https://github.com/rs/zerolog) for structured logging and the official [OpenTelemetry Go SDK](https://opentelemetry.io/docs/languages/go/) (`otel`, `otel/sdk`, `otelhttp`, OTLP/HTTP exporter) for tracing. Prometheus metrics are implemented without `client_golang`. All modules are scanned by Trivy and updated by Dependabot. |
 | **Observability** | **RED Metrics + OpenTelemetry Tracing** | Request rate, errors and duration at `/metrics` on a separate internal port (`:9090`) that is not part of the Service or Ingress. Distributed tracing with W3C Trace Context (`traceparent`) propagation on incoming and outgoing requests, OTLP/HTTP export, and `trace_id`/`span_id` in request logs. |
@@ -94,7 +93,6 @@ go-k8s-secure-service/
 │       ├── scorecard.yml   # OpenSSF Scorecard supply-chain analysis
 │       ├── codeql.yml      # CodeQL static analysis (Go)
 │       └── release.yml     # Tag release: GHCR push, SBOMs, keyless Cosign signing, GitHub Release
-├── .idea/              # IDE configuration
 ├── e2e/
 │   ├── namespace.yaml     # Namespace enforcing the restricted Pod Security profile
 │   ├── smoke.sh           # Deploys to a cluster and checks endpoints via port-forward
@@ -104,10 +102,15 @@ go-k8s-secure-service/
 │   ├── service.yaml       # ClusterIP Service exposing the HTTP port
 │   ├── pdb.yaml           # PodDisruptionBudget keeping a replica up during disruptions
 │   ├── networkpolicy.yaml # Default-deny NetworkPolicy: HTTP ingress, metrics from monitoring only
-│   └── policies/          # CEL-based Kyverno ValidatingPolicy/ImageValidatingPolicy and offline tests (tests/)
-├── .aiignore           # AI tool ignore rules
+│   └── policies/          # CEL-based Kyverno policies (applied separately)
+│       ├── disallow-root-user.yaml             # ValidatingPolicy: no runAsUser 0
+│       ├── disallow-privileged-containers.yaml # ValidatingPolicy: no privileged containers
+│       ├── require-probes.yaml                 # ValidatingPolicy: liveness + readiness probes
+│       ├── require-resource-limits.yaml        # ValidatingPolicy: CPU + memory limits
+│       ├── verify-image-signature.yaml         # ImageValidatingPolicy: Cosign keyless signature
+│       └── tests/                              # Offline `kyverno test` suite and fixture pods
 ├── .gitignore          # Git ignore rules
-├── .dockerignore       # Excludes development files from the build context
+├── .dockerignore       # Limits the build context to go.mod, go.sum and the Go sources
 ├── Dockerfile          # Multi-stage hardened container build
 ├── go.mod              # Go module definition and dependencies
 ├── go.sum              # Dependency checksums
@@ -215,6 +218,10 @@ there, or check in WSL.
 
 To scan a locally built image with the same settings, run
 `trivy image --config trivy.yaml go-k8s-secure-service:local`.
+
+`trivy.yaml` sets `exit-code: 0`, so local scans only report findings. CI
+passes `exit-code: 1` and fails the job on HIGH/CRITICAL; add `--exit-code 1`
+to get the same behaviour locally.
 
 ### Building and Running the Container
 
@@ -529,15 +536,18 @@ The manifests live in [`k8s/`](k8s/):
   resources deny containers running as `runAsUser: 0`, deny privileged
   containers, and require liveness/readiness probes and CPU/memory limits.
   Kyverno auto-generates the same checks for Deployments, StatefulSets,
-  DaemonSets, ReplicaSets, Jobs and CronJobs. The `kube-system`,
-  `kube-public`, `kube-node-lease` and `kyverno` namespaces are excluded. They are not applied by `kubectl apply -f k8s/`; install
+  DaemonSets, ReplicaSets, Jobs and CronJobs. These four policies exclude the
+  `kube-system`, `kube-public`, `kube-node-lease` and `kyverno` namespaces.
+  None of the policies are applied by `kubectl apply -f k8s/` (it does not
+  recurse into subdirectories); install
   Kyverno and apply them with `kubectl apply -f k8s/policies/`. Policy
   tests (`kyverno test k8s/policies/tests`) run offline against fixture pods
   and `deployment.yaml`, and CI runs them on every push and PR.
   `verify-image-signature.yaml`, an `ImageValidatingPolicy`, additionally requires images from
   `ghcr.io/cooler-sai/go-k8s-secure-service` to carry a Cosign keyless
-  signature from the release workflow (see below); it only matches that
-  registry path, so locally built images are unaffected.
+  signature from the release workflow (see below). It has no namespace
+  exclusions, but it only matches that registry path, so locally built images
+  are unaffected.
 
 ### Supply Chain: SBOM and Image Signing
 
@@ -692,7 +702,7 @@ Published releases are listed on the
 - [x] **Structured Logging**: Structured JSON logging on stdout via `zerolog`, including `net/http` internal errors.
 - [x] **Configurable Environment**: Support configuring the HTTP listen port via the standard `PORT` environment variable.
 - [x] **Containerization & Hardening**: Multi-stage distroless image, static binary, non-root runtime user, and hardened Kubernetes `SecurityContext` example.
-- [x] **Network Policy**: Least-privilege Kubernetes `NetworkPolicy`: ingress only on the HTTP port from the same namespace and the ingress controller, all egress denied.
+- [x] **Network Policy**: Least-privilege Kubernetes `NetworkPolicy`: ingress on the HTTP port only from the same namespace and the ingress controller, on the metrics port only from the `monitoring` namespace, all egress denied.
 - [x] **Admission Policies (Kyverno)**: CEL-based `ValidatingPolicy` rules (`policies.kyverno.io/v1`) for non-root, non-privileged containers, mandatory probes and resource limits, validated offline in CI with `kyverno test`.
 - [x] **SBOM & Image Signing (Cosign)**: Trivy-generated SPDX/CycloneDX SBOMs in CI, keyless Cosign signing and SBOM attestations on release, and a Kyverno policy that verifies the signature at admission.
 - [x] **E2E Smoke Test (kind)**: GitHub Actions deploys the manifests to a single-node kind cluster under the `restricted` Pod Security profile and checks the endpoints through port-forward, with Kyverno installed and a live admission test that verifies a signed release image.

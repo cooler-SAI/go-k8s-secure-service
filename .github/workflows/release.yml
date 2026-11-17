@@ -127,4 +127,9 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.ref_name }}
         run: |
-          gh release create "$TAG"             --repo "$GITHUB_REPOSITORY"             --title "$TAG"             --generate-notes             sbom.spdx.json sbom.spdx.json.sigstore.json             sbom.cdx.json sbom.cdx.json.sigstore.json
+          gh release create "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "$TAG" \
+            --generate-notes \
+            sbom.spdx.json sbom.spdx.json.sigstore.json \
+            sbom.cdx.json sbom.cdx.json.sigstore.json

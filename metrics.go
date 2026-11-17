@@ -16,8 +16,9 @@ import (
 )
 
 // RED metrics (Rate, Errors, Duration) in the Prometheus text exposition
-// format, implemented on the standard library so the service keeps a single
-// direct dependency:
+// format, implemented on the standard library instead of
+// prometheus/client_golang, which would add several transitive modules to
+// the binary and the image scan:
 //
 //   - http_requests_total{method,route,code}: request rate, and error rate
 //     via code=~"5..".
