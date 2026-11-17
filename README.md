@@ -3,7 +3,6 @@
 [![CI](https://github.com/cooler-SAI/go-k8s-secure-service/actions/workflows/ci.yml/badge.svg)](https://github.com/cooler-SAI/go-k8s-secure-service/actions/workflows/ci.yml)
 [![Security Scan (Trivy)](https://github.com/cooler-SAI/go-k8s-secure-service/actions/workflows/trivy.yml/badge.svg)](https://github.com/cooler-SAI/go-k8s-secure-service/actions/workflows/trivy.yml)
 ![Go Version](https://img.shields.io/badge/Go-1.27.3-00ADD8?logo=go)
-![Tests](https://img.shields.io/badge/tests-passing-brightgreen)
 ![Coverage](https://img.shields.io/badge/coverage-77.0%25-brightgreen)
 [![Release](https://img.shields.io/github/v/release/cooler-SAI/go-k8s-secure-service?sort=semver)](https://github.com/cooler-SAI/go-k8s-secure-service/releases/latest)
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/cooler-SAI/go-k8s-secure-service/badge)](https://scorecard.dev/viewer/?uri=github.com/cooler-SAI/go-k8s-secure-service)
