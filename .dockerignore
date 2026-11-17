@@ -1,17 +1,27 @@
+# The image build needs only go.mod, go.sum and the Go sources.
+
 # Git & IDE
 .git
 .idea
 .vscode
+.agents
+.gemini
+goland64.exe.vmoptions
 
-# Binary outputs & tests
+# Binary outputs & test artifacts
+go-k8s-secure-service
 *.exe
 *.test
 *.out
+coverage
+coverage.*
 
-# Project metadata & configs
+# CI, Kubernetes manifests, E2E scripts and docs
 .github
+k8s
+e2e
 Dockerfile*
 .dockerignore
-README.md
+*.md
+LICENSE
 trivy.yaml
-goland64.exe.vmoptions
