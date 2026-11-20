@@ -85,11 +85,7 @@ kind load docker-image "$IMAGE" --name "$KIND_CLUSTER"
 kubectl delete namespace "$TEST_NS" --ignore-not-found --wait --timeout=120s
 kubectl create namespace "$TEST_NS"
 for ns in "$APP_NS" "$TEST_NS"; do
-  # EXPERIMENT (do not merge): the listen rule (the first Sigkill in
-  # network.yaml) reports with Post instead of killing, so misfires on the
-  # allowed ports are recorded without killing anything.
-  kubectl -n "$ns" apply -f k8s/runtime-security/exec-allowlist.yaml -f k8s/runtime-security/syscalls.yaml
-  sed '0,/action: Sigkill/s//action: Post/' k8s/runtime-security/network.yaml | kubectl -n "$ns" apply -f -
+  kubectl -n "$ns" apply -f k8s/runtime-security/
 done
 # Without kprobe_multi (kernels before 5.18) every listed system call is a
 # separate kprobe, so the syscalls policy can take a minute or two to load.
@@ -216,31 +212,13 @@ run_harness listen-other listen 7777
 run_harness connect-api connect "${api_ip}:443"
 run_harness connect-otlp connect 127.0.0.1:4318
 run_harness ptrace ptrace
-# EXPERIMENT: more listens on the allowed ports (:8080 at start, :9090 10 s later).
-for i in 1 2 3 4 5 6 7 8; do run_harness "sample-$i" listen 9090; done
 
 expect idle survived "baseline (listen :8080, no action)"
 expect exec-other killed "execve of /other"
-expect listen-other survived "listen on :7777 (EXPERIMENT: Post, not Sigkill)"
+expect listen-other killed "listen on :7777"
 expect connect-api killed "outbound TCP to ${api_ip}:443"
 expect connect-otlp survived "outbound TCP to :4318 (OTLP)"
 expect ptrace killed "ptrace system call"
-for i in 1 2 3 4 5 6 7 8; do expect "sample-$i" survived "sample $i: listen on :8080 and :9090"; done
-
-# --- EXPERIMENT: every listen event the network policy reported. ---
-# With Post, the rule reports instead of killing. Any event on 8080 or 9090
-# is a misfire: the selector is NotSPort [8080, 9090].
-sleep 3
-listen_events=$(jq -rR 'fromjson? | select(.process_kprobe.function_name == "inet_csk_listen_start") |
-  .process_kprobe | [(.process.pod.namespace // "-"), (.process.pod.name // "-"),
-  .args[0].sock_arg.family, (.args[0].sock_arg.saddr // "-"), (.args[0].sock_arg.sport | tostring),
-  (.action // "-")] | @tsv' "$workdir/kprobes.json")
-echo "--- EXPERIMENT: inet_csk_listen_start events (namespace, pod, family, saddr, sport, action) ---"
-echo "${listen_events:-<none>}"
-echo "--- EXPERIMENT: counts by namespace, family, sport ---"
-awk -F'	' 'NF { print $1, $3, $5 }' <<<"$listen_events" | sort | uniq -c
-misfires=$(awk -F'	' '$5 == "8080" || $5 == "9090"' <<<"$listen_events" | wc -l)
-echo "EXPERIMENT: $misfires listen event(s) on allowed ports; harness listens on allowed ports: $((2 * 8 + 6)) in $TEST_NS, plus the service pods in $APP_NS"
 
 # --- 3. kubectl exec into a selected container. ---
 if out=$(kubectl -n "$TEST_NS" exec idle -c server -- /other idle 2>&1); then
@@ -280,10 +258,6 @@ for p in "${POLICIES[@]}"; do
   fi
 done
 echo "ok   every policy enforced in $TEST_NS, none fired for the service in $APP_NS"
-if [ "$misfires" -ne 0 ]; then
-  echo "FAIL EXPERIMENT: the listen rule fired $misfires time(s) on allowed ports" >&2
-  exit 1
-fi
 
 kubectl delete namespace "$TEST_NS" --wait=false >/dev/null
 echo "Runtime-security E2E test passed"
