@@ -10,7 +10,7 @@
 
 A lightweight, secure Go HTTP service designed for containerized deployment and orchestration in Kubernetes environments.
 
-**Contents:** [Status](#project-status) · [Overview](#overview) · [HTTP API](#http-api) · [Getting Started](#getting-started) · [Logging](#logging) · [Metrics](#metrics) · [Tracing](#tracing-opentelemetry) · [Kubernetes](#kubernetes-integration) · [Runtime Security](#runtime-security-cilium-tetragon) · [CI/CD](#cicd-pipelines) · [Troubleshooting](#troubleshooting) · [Roadmap](#roadmap--security-hardening) · [Security](#security-info)
+**Contents:** [Status](#project-status) · [Overview](#overview) · [HTTP API](#http-api) · [Getting Started](#getting-started) · [Logging](#logging) · [Metrics](#metrics) · [Tracing](#tracing-opentelemetry) · [Kubernetes](#kubernetes-integration) · [Runtime Security](#runtime-security-cilium-tetragon) · [Chaos Test](#chaos-test-kind) · [CI/CD](#cicd-pipelines) · [Troubleshooting](#troubleshooting) · [Roadmap](#roadmap--security-hardening) · [Security](#security-info)
 
 ---
 
@@ -26,6 +26,7 @@ A lightweight, secure Go HTTP service designed for containerized deployment and 
 | **Container Hardening** | **Distroless Non-Root (`65532:65532`)** | Multi-stage build (`golang:1.27.3-alpine` builder) deploying to `gcr.io/distroless/static-debian13:nonroot` with read-only rootfs and dropped Linux capabilities. |
 | **Kubernetes Compliance** | **Production Baseline Manifests** | Hardened `Deployment` (probes, non-root `SecurityContext`, `GOMEMLIMIT`), `ClusterIP Service`, `PodDisruptionBudget`, least-privilege `NetworkPolicy` (default deny egress, restricted ingress for traffic and metrics), and CEL-based Kyverno `ValidatingPolicy`/`ImageValidatingPolicy` rules (non-root, non-privileged, probes, resource limits, image signature). |
 | **Runtime Security** | **Cilium Tetragon (eBPF) enforcement** | Three `TracingPolicyNamespaced` policies kill the server process on any `execve` other than `/server`, on 28 escape / privilege-escalation system calls, on listening outside `8080`/`9090`, and on outbound TCP other than OTLP (`4318`). Verified in CI on a kind cluster with Tetragon 1.8.0. |
+| **Chaos Test (kind)** | **PASS: 0 failed of 30,001 requests** | 200 req/s through the Service while the Deployment is rolled twice, `kubectl exec` is tried on each serving pod, and four post-exploitation actions run in a pod under the same policies: 0 failed requests, 0 5xx, p99 1.58 ms, 0 restarts, every attack ended by Tetragon's `SIGKILL`. See [Chaos Test](#chaos-test-kind). |
 | **CI/CD Automation** | **Active (GitHub Actions)** | Continuous integration enforcing formatting (`gofmt`), module verification, code vet (`go vet`), test suite with race detector, router fuzzing, static binary build verification, offline Kyverno policy tests (checksum-verified CLI), a kind E2E smoke test under the `restricted` Pod Security profile with Kyverno enforcing (including live Cosign signature verification), and Trivy security scanning. |
 | **Supply Chain** | **SBOM + Signed Releases** | Trivy-generated SPDX/CycloneDX SBOMs, and tagged releases pushed to GHCR with keyless Cosign signatures and SBOM attestations, verified at admission by Kyverno. |
 
@@ -95,6 +96,10 @@ go-k8s-secure-service/
 │       ├── scorecard.yml   # OpenSSF Scorecard supply-chain analysis
 │       ├── codeql.yml      # CodeQL static analysis (Go)
 │       └── release.yml     # Tag release: GHCR push, SBOMs, keyless Cosign signing, GitHub Release
+├── chaos/
+│   ├── run.sh             # kind chaos test: rollouts, kubectl exec and RCE actions under k6 load
+│   ├── k6-load.js         # In-cluster constant-rate load with zero-failure thresholds
+│   └── red-watch.sh       # Live per-pod RED metrics from :9090, including draining pods
 ├── e2e/
 │   ├── namespace.yaml     # Namespace enforcing the restricted Pod Security profile
 │   ├── kind-config.yaml   # kind cluster config (mounts the host's /proc for Tetragon)
@@ -767,6 +772,123 @@ helm install tetragon tetragon --repo https://helm.cilium.io --version 1.8.0 \
 
 ---
 
+## Chaos Test (kind)
+
+CI shows that each piece works on its own. [`chaos/run.sh`](chaos/run.sh)
+checks them together on a local kind cluster: the service under constant
+load while its pods are replaced and attacked.
+
+| Step | What happens | Pass condition |
+| :--- | :--- | :--- |
+| Load | [k6](chaos/k6-load.js) runs as a Job next to the service and sends 200 req/s through the Service for 150 s (constant arrival rate, keep-alive connections) | no failed request, no 5xx, no transport error, no dropped iteration (k6 thresholds) |
+| Live RED metrics | [`red-watch.sh`](chaos/red-watch.sh) scrapes `:9090/metrics` of every pod every 2 s through the API server's pod proxy, including `Terminating` pods while they drain | no 5xx counted by any pod |
+| Rollouts | 2 × `kubectl rollout restart` under load | no service container restarts |
+| Attack on the live pods | `kubectl exec <pod> -- /bin/sh` into each serving container | exec fails, server keeps serving |
+| Attack from inside a pod | the [test harness](e2e/tetragon-harness/main.go) runs as `/server` under the same labels and policies (in `chaos-attack`, so it never receives traffic) and does what an attacker with code execution would try next: reverse shell, bind shell, dropped binary, `ptrace` | exit code `137` (`SIGKILL`), and the call never returned to user space |
+| Tetragon counters | kills per policy and namespace, from `tetra tracingpolicy list` before and after | one kill per attack; no policy fires for the server itself |
+
+```bash
+./chaos/run.sh                      # creates kind cluster "chaos", installs Tetragon 1.8.0
+RATE=500 DURATION=300s ROLLOUTS=5 ./chaos/run.sh
+```
+
+It needs docker, kind, kubectl, helm and Go, and runs on Linux and in Git
+Bash on Windows (Docker Desktop). The setup is idempotent, so a rerun reuses
+the cluster (`SKIP_BUILD=1` skips the image builds). Everything it saw goes
+to `chaos/results/<timestamp>/`: `timeline.log`, `red.log`, `k6.log`, the raw
+`tetragon-events.json`, its `tetra getevents -o compact` rendering,
+`counters.txt` and `summary.md`.
+
+### Chaos Test Results
+
+Run on 2026-11-20: kind v0.27.0 (Kubernetes v1.32.2), Tetragon 1.8.0,
+Docker Desktop on Windows 11 (WSL2 kernel 5.15.167), single node. Two
+consecutive runs gave the same result.
+
+| Metric | Result |
+| :--- | :--- |
+| Requests | **30,001** at 198.8 req/s |
+| Failed requests / 5xx / transport errors / dropped | **0 / 0 / 0 / 0** |
+| Latency p95 / p99 / max | 1.21 ms / **1.58 ms** / 7.09 ms |
+| Service container restarts | **0** |
+| `kubectl exec` into the 2 serving pods | both blocked: `OCI runtime exec failed: ... procReady not received` |
+| Reverse shell, bind shell, dropped binary, `ptrace` | all 4 killed, exit code `137`, none of the calls returned |
+
+**Zero 5xx during the drain.** A slice of `red.log` around the first
+rollout (route `/` only; `RPS`, `2XX` and `5XX` are per scrape interval).
+The new pods `vhmlz` and `9h4cc` become Ready, then the old pods `pz4pn`
+and `tb8fv` turn `Terminating`:
+
+```text
+TIME      POD    STATE        RPS   2XX  5XX  IN-FLIGHT  P99
+22:08:24  vhmlz  Ready         0.0     0     0          0  -
+22:08:25  pz4pn  Terminating  79.5   219     0          0  <=5ms
+22:08:26  tb8fv  Ready       108.4   295     0          0  <=5ms
+22:08:27  vhmlz  Ready         2.7     7     0          0  <=5ms
+22:08:28  pz4pn  Terminating  gone
+22:08:29  tb8fv  Terminating 122.2   377     0          0  <=5ms
+22:08:30  vhmlz  Ready        51.7   159     0          0  <=5ms
+22:08:31  tb8fv  Terminating  gone
+22:08:33  vhmlz  Ready       119.7   287     0          0  <=5ms
+```
+
+A `Terminating` pod keeps serving 80–120 req/s at full speed, because the
+keep-alive connections opened before its endpoint was removed still reach
+it, while new connections already go to the new pods. When the 5 s
+[drain delay](#pod-lifecycle-probes-and-sigterm-handling) ends, `Shutdown`
+finishes the in-flight requests and closes the idle connections, the
+clients reconnect to the new pods, and the old pod's metrics endpoint goes
+away (`gone`) a few seconds after it turned `Terminating`. The handover
+cost no request: k6 counted no error in 150 s, two rollouts and four pod
+replacements.
+
+**Instant SIGKILL.** Tetragon's counters during the test (`counters.txt`):
+
+```text
+POLICY                            NAMESPACE      EVENTS  SIGKILLS
+go-k8s-secure-service-exec        chaos               0         0
+go-k8s-secure-service-exec        chaos-attack        1         1
+go-k8s-secure-service-network     chaos               0         0
+go-k8s-secure-service-network     chaos-attack        2         2
+go-k8s-secure-service-syscalls    chaos               2         2
+go-k8s-secure-service-syscalls    chaos-attack        1         1
+```
+
+and the same six events from `tetra getevents -o compact --timestamps`:
+
+```text
+2026-11-20T19:09:11.842781241Z ❓ syscall chaos-control-plane  __x64_sys_keyctl
+2026-11-20T19:09:12.374153553Z ❓ syscall chaos-control-plane  __x64_sys_keyctl
+2026-11-20T19:09:24.777920327Z 🔌 connect chaos-control-plane  tcp 10.244.0.29:54894 -> 10.96.0.1:443
+2026-11-20T19:09:25.384469487Z ❓ syscall chaos-control-plane  inet_csk_listen_start
+2026-11-20T19:09:25.664275441Z ❓ syscall chaos-control-plane  security_bprm_check
+2026-11-20T19:09:26.071847558Z ❓ syscall chaos-control-plane  __x64_sys_ptrace
+```
+
+- **`kubectl exec` dies before the command runs.** Both exec attempts were
+  killed at `keyctl`: runc's init process joins a session keyring while it
+  sets up the exec, and `keyctl` is on the syscalls policy's list, so it is
+  killed before it reaches `execve`. The exec policy never had to act (0 in
+  `chaos`), and the server process in the same container did not notice:
+  0 restarts, 0 failed requests.
+- **The kill happens inside the kernel call.** The harness prints
+  `<action> returned: ...` when a call comes back to user space. None of
+  the four attack pods printed it: the reverse shell's `connect` to the API
+  server, the bind shell's `listen` on `:4444`, the `execve` of a dropped
+  binary and `ptrace` were each stopped by the `SIGKILL` the eBPF program
+  sends before the call returns.
+- **No false positives.** No policy fired for the server itself through
+  four pod starts, two rollouts and 30,001 requests.
+
+On Docker Desktop, Tetragon enforces correctly but cannot attach the pod
+name to these events (the `POD` column of `kills.txt` shows `-`): the PIDs
+its eBPF programs report and the `/proc` mounted into the kind node come
+from different PID namespaces of the WSL2 VM. The per-namespace counters
+above attribute every kill instead. On a Linux host, as in CI, the events
+carry the pod as well.
+
+---
+
 ## CI/CD Pipelines
 
 | Workflow | Triggers | What it does |
@@ -842,6 +964,7 @@ Published releases are listed on the
 - [x] **Distributed Tracing (OpenTelemetry)**: W3C Trace Context propagation for incoming and outgoing requests, OTLP/HTTP export, Kubernetes resource attributes, and `trace_id`/`span_id` in request logs.
 - [x] **Prometheus Metrics (RED)**: Request rate, errors and duration on a separate internal metrics port (`:9090`), kept off the Service and Ingress and restricted by NetworkPolicy, without adding `client_golang`.
 - [x] **Runtime Security (Cilium Tetragon)**: eBPF `TracingPolicyNamespaced` policies kill the server on unexpected `execve`, escape / privilege-escalation system calls, unexpected listening ports and outbound TCP; verified against a live kernel in CI.
+- [x] **Chaos Test (kind)**: k6 load during rolling restarts, `kubectl exec` and simulated post-exploitation actions, with live RED metrics and Tetragon kill counters: zero failed requests, every attack killed.
 
 ---
 
