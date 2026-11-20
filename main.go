@@ -85,6 +85,10 @@ func setupMetricsRouter(metrics *httpMetrics) http.Handler {
 }
 
 func newServer(addr string, handler http.Handler) *http.Server {
+	return newServerWithContext(context.Background(), addr, handler)
+}
+
+func newServerWithContext(baseCtx context.Context, addr string, handler http.Handler) *http.Server {
 	return &http.Server{
 		Addr:              addr,
 		Handler:           handler,
@@ -92,6 +96,9 @@ func newServer(addr string, handler http.Handler) *http.Server {
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      10 * time.Second,
 		IdleTimeout:       60 * time.Second,
+		BaseContext: func(_ net.Listener) context.Context {
+			return baseCtx
+		},
 		// Route net/http's internal errors (TLS handshakes, panics in
 		// handlers, Accept failures) through zerolog instead of the std logger.
 		ErrorLog: stdlog.New(log.Logger.With().Str("component", "net/http").Logger(), "", 0),
@@ -106,11 +113,14 @@ func run(ctx context.Context, ln, metricsLn net.Listener, drainDelay time.Durati
 	isReady.Store(true)
 
 	metrics := newHTTPMetrics()
+	baseCtx, cancelBase := context.WithCancel(context.Background())
+	defer cancelBase()
+
 	// Tracing must wrap the metrics middleware, not the other way round:
 	// otelhttp passes a copy of the request down, and both rely on the mux
 	// setting the matched pattern on the request they hold.
-	srv := newServer(ln.Addr().String(), tr.handler(metrics.instrument(setupRouter(&isReady))))
-	metricsSrv := newServer(metricsLn.Addr().String(), setupMetricsRouter(metrics))
+	srv := newServerWithContext(baseCtx, ln.Addr().String(), tr.handler(metrics.instrument(setupRouter(&isReady))))
+	metricsSrv := newServerWithContext(baseCtx, metricsLn.Addr().String(), setupMetricsRouter(metrics))
 
 	// Buffered for both servers, so neither goroutine blocks on send.
 	serverErr := make(chan error, 2)
@@ -155,7 +165,10 @@ func run(ctx context.Context, ln, metricsLn net.Listener, drainDelay time.Durati
 
 		// Traffic first, then metrics, so the drain stays observable until
 		// the last in-flight request has finished.
-		if err := errors.Join(srv.Shutdown(shutdownCtx), metricsSrv.Shutdown(shutdownCtx)); err != nil {
+		trafficErr := srv.Shutdown(shutdownCtx)
+		cancelBase()
+		metricsErr := metricsSrv.Shutdown(shutdownCtx)
+		if err := errors.Join(trafficErr, metricsErr); err != nil {
 			return fmt.Errorf("graceful shutdown failed: %w", err)
 		}
 		log.Info().Msg("server gracefully stopped")
