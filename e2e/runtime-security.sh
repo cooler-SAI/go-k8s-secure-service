@@ -113,60 +113,6 @@ if [ "$ready" -ne $((${#POLICIES[@]} * 2)) ]; then
 fi
 echo "ok   ${#POLICIES[@]} tracing policies enabled in $APP_NS and $TEST_NS"
 
-# EXPERIMENT (do not merge): report-only probe policies on the same hook in
-# $TEST_NS, to see which form of the port check Tetragon evaluates correctly.
-#   probe-any            no port check: every listen Tetragon evaluates
-#   probe-sport-host     SPort [8080, 9090]
-#   probe-sport-swapped  SPort with the bytes swapped (8080 -> 36895, 9090 -> 33315)
-#   probe-notsport-one   NotSPort [9090], a single value
-probe_policy() { # probe_policy <name> [<operator> <port>...]
-  local name=$1 op=${2:-} sel
-  shift 2 2>/dev/null || shift $#
-  if [ -n "$op" ]; then
-    sel="      selectors:
-        - matchArgs:
-            - index: 0
-              operator: ${op}
-              values: [$(printf '"%s",' "$@" | sed 's/,$//')]
-          matchActions:
-            - action: Post"
-  else
-    sel=""
-  fi
-  kubectl -n "$TEST_NS" apply -f - <<EOF
-apiVersion: cilium.io/v1alpha1
-kind: TracingPolicyNamespaced
-metadata:
-  name: ${name}
-spec:
-  podSelector:
-    matchLabels:
-      app: go-k8s-secure-service
-  containerSelector:
-    matchExpressions:
-      - key: name
-        operator: In
-        values: [server]
-  kprobes:
-    - call: inet_csk_listen_start
-      syscall: false
-      args:
-        - index: 0
-          type: sock
-${sel}
-EOF
-}
-probe_policy probe-any
-probe_policy probe-sport-host SPort 8080 9090
-probe_policy probe-sport-swapped SPort 36895 33315
-probe_policy probe-notsport-one NotSPort 9090
-for _ in $(seq 1 60); do
-  n=$(tetra tracingpolicy list 2>/dev/null | awk -v ns="$TEST_NS" '$2 ~ /^probe-/ && $4 == "enabled" && $6 == ns' | wc -l)
-  [ "$n" -eq 4 ] && break
-  sleep 2
-done
-echo "EXPERIMENT: $n of 4 probe policies enabled in $TEST_NS"
-
 # Record every policy match and process exit for the failure report. Not
 # filtered by namespace: a process killed before Tetragon knows its pod
 # (runc's init) carries no namespace.
@@ -286,14 +232,14 @@ for i in 1 2 3 4 5 6 7 8; do expect "sample-$i" survived "sample $i: listen on :
 # is a misfire: the selector is NotSPort [8080, 9090].
 sleep 3
 listen_events=$(jq -rR 'fromjson? | select(.process_kprobe.function_name == "inet_csk_listen_start") |
-  .process_kprobe | [.policy_name, (.process.pod.namespace // "-"), (.process.pod.name // "-"),
+  .process_kprobe | [(.process.pod.namespace // "-"), (.process.pod.name // "-"),
   .args[0].sock_arg.family, (.args[0].sock_arg.saddr // "-"), (.args[0].sock_arg.sport | tostring),
   (.action // "-")] | @tsv' "$workdir/kprobes.json")
-echo "--- EXPERIMENT: inet_csk_listen_start events (policy, namespace, pod, family, saddr, sport, action) ---"
+echo "--- EXPERIMENT: inet_csk_listen_start events (namespace, pod, family, saddr, sport, action) ---"
 echo "${listen_events:-<none>}"
-echo "--- EXPERIMENT: counts by policy, namespace, sport ---"
-awk -F'	' 'NF { print $1, $2, $6 }' <<<"$listen_events" | sort | uniq -c
-misfires=$(awk -F'	' '$1 == "go-k8s-secure-service-network" && ($6 == "8080" || $6 == "9090")' <<<"$listen_events" | wc -l)
+echo "--- EXPERIMENT: counts by namespace, family, sport ---"
+awk -F'	' 'NF { print $1, $3, $5 }' <<<"$listen_events" | sort | uniq -c
+misfires=$(awk -F'	' '$5 == "8080" || $5 == "9090"' <<<"$listen_events" | wc -l)
 echo "EXPERIMENT: $misfires listen event(s) on allowed ports; harness listens on allowed ports: $((2 * 8 + 6)) in $TEST_NS, plus the service pods in $APP_NS"
 
 # --- 3. kubectl exec into a selected container. ---
