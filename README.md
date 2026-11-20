@@ -724,6 +724,14 @@ about 40 MB of kernel memory per namespace; newer kernels attach it in one
 step. `kubectl apply -f k8s/` does not apply these policies (no recursion),
 so clusters without Tetragon's CRDs are unaffected.
 
+A pod that starts within about a second after the policies show as
+`enabled` can be killed when it starts listening on an allowed port. This
+was seen in CI with Tetragon 1.8.0: the server was killed on its first
+listen on `8080`, and the restarted container ran normally. The pod recovers
+with one restart, but to avoid it, apply the policies a few seconds before
+rolling the Deployment. The E2E test waits for a canary pod to survive
+first (see below).
+
 Keep the policies in sync with the configuration: if you change `PORT` or
 `METRICS_PORT`, update the ports in `network.yaml`; if you export traces to a
 collector on a port other than `4318`, update `network.yaml` and the egress
@@ -744,7 +752,9 @@ kubectl -n kube-system exec ds/tetragon -c tetragon -- \
 
 [`e2e/runtime-security.sh`](e2e/runtime-security.sh) runs in CI after the
 smoke and admission tests, on the same kind cluster with Tetragon installed.
-It applies the policies, restarts the real Deployment under them and checks
+It applies the policies and, in each namespace, waits until a canary pod
+(the test binary listening on `8080` and `9090`) survives, retrying while
+Tetragon settles. It then restarts the real Deployment under the policies and checks
 that the pods become Ready without restarts. It then starts pods running a
 test binary ([`e2e/tetragon-harness`](e2e/tetragon-harness/main.go)) as
 `/server` with the same labels, each performing one action:
@@ -760,7 +770,10 @@ test binary ([`e2e/tetragon-harness`](e2e/tetragon-harness/main.go)) as
 | `kubectl exec` into the running pod | exec fails, server keeps running |
 
 Finally it checks Tetragon's counters: every policy enforced at least once in
-the test namespace, and none fired for the real service. To run it locally
+the test namespace, and none fired for the real service. Both are counted
+from after the canary step, so canaries killed there don't count. If the test
+fails, it prints the cluster state, the Tetragon events, and the kprobe
+arguments (for example the port of a socket that was killed on listen). To run it locally
 after the smoke test (kind cluster created with
 [`e2e/kind-config.yaml`](e2e/kind-config.yaml)):
 
