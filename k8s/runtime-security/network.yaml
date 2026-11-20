@@ -37,14 +37,25 @@ spec:
       args:
         - index: 0
           type: sock
+      # Selectors are checked in order and the first match applies: the
+      # allowed ports match the first one and are ignored (NoPost); any other
+      # port falls through to the second one and is killed.
+      #
+      # Do not write this as a single NotSPort ["8080", "9090"]: Tetragon
+      # 1.8.0 evaluates NotSPort with more than one value as true for every
+      # port, so it killed the server on its own listen on 8080 or 9090
+      # (verified in CI; SPort, and NotSPort with one value, are correct).
+      # e2e/runtime-security.sh checks a late listen on 9090 for this.
       selectors:
         - matchArgs:
             - index: 0
-              operator: NotSPort
+              operator: SPort
               values:
                 - "8080" # PORT: application traffic
                 - "9090" # METRICS_PORT: Prometheus /metrics
           matchActions:
+            - action: NoPost
+        - matchActions:
             - action: Sigkill
     # An outbound TCP connection is being opened.
     - call: tcp_connect

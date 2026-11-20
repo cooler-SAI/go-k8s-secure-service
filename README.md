@@ -700,6 +700,11 @@ How they are scoped and what they do:
   anything else. `perf_event_open` is left out because some kernels refuse a
   kprobe on it, which would stop the whole policy from loading; seccomp
   blocks it here anyway.
+- The listen rule allows `8080`/`9090` with an `SPort` selector (action
+  `NoPost`) followed by a catch-all `Sigkill` selector. A single
+  `NotSPort ["8080", "9090"]` would be simpler, but Tetragon 1.8.0 evaluates
+  `NotSPort` with more than one value as true for every port, and it killed
+  the server on its own allowed ports (found by the E2E test).
 - When a rule fires, the server process exits with code `137` and the
   kubelet restarts the container (the Deployment's `restartPolicy` is
   `Always`). That is the intended response: a process that tried to escape
@@ -754,6 +759,7 @@ test binary ([`e2e/tetragon-harness`](e2e/tetragon-harness/main.go)) as
 | none (listen on `8080` only) | survives |
 | `execve("/other")` | killed (exit code `137`) |
 | listen on `7777` | killed |
+| listen on `9090`, 10 s after start | survives |
 | TCP connect to the Kubernetes API (`:443`) | killed |
 | TCP connect to `127.0.0.1:4318` | survives |
 | `ptrace(PTRACE_TRACEME)` | killed |

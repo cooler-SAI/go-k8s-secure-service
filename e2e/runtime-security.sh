@@ -209,6 +209,10 @@ api_ip=$(kubectl -n default get svc kubernetes -o jsonpath='{.spec.clusterIP}')
 run_harness idle idle
 run_harness exec-other exec /other
 run_harness listen-other listen 7777
+# 10 s after start, so Tetragon has picked up the pod and really checks the
+# port: an allowed listen must survive (a NotSPort list with two values
+# killed it in Tetragon 1.8.0).
+run_harness listen-allowed listen 9090
 run_harness connect-api connect "${api_ip}:443"
 run_harness connect-otlp connect 127.0.0.1:4318
 run_harness ptrace ptrace
@@ -216,6 +220,7 @@ run_harness ptrace ptrace
 expect idle survived "baseline (listen :8080, no action)"
 expect exec-other killed "execve of /other"
 expect listen-other killed "listen on :7777"
+expect listen-allowed survived "listen on :9090 (allowed port)"
 expect connect-api killed "outbound TCP to ${api_ip}:443"
 expect connect-otlp survived "outbound TCP to :4318 (OTLP)"
 expect ptrace killed "ptrace system call"
