@@ -32,3 +32,6 @@ goland64.exe.vmoptions
 # Local AI-agent scratch directories
 .agents/
 .gemini/
+
+# Chaos test evidence (chaos/run.sh); summarised in the README
+chaos/results/
