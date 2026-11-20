@@ -800,6 +800,11 @@ load while its pods are replaced and attacked.
 | Attack from inside a pod | the [test harness](e2e/tetragon-harness/main.go) runs as `/server` under the same labels and policies (in `chaos-attack`, so it never receives traffic) and does what an attacker with code execution would try next: reverse shell, bind shell, dropped binary, `ptrace` | exit code `137` (`SIGKILL`), and the call never returned to user space |
 | Tetragon counters | kills per policy and namespace, from `tetra tracingpolicy list` before and after | one kill per attack; no policy fires for the server itself |
 
+Before the load starts, the script waits until the policies have settled:
+a canary pod in each namespace must listen on `8080` and `9090` without
+being killed (see [Installing](#installing)). Canary kills happen before the
+"before" counters are taken, so they don't count.
+
 ```bash
 ./chaos/run.sh                      # creates kind cluster "chaos", installs Tetragon 1.8.0
 RATE=500 DURATION=300s ROLLOUTS=5 ./chaos/run.sh
