@@ -5,9 +5,6 @@
 #
 #   1. Setup (idempotent): kind cluster, image, Tetragon, the manifests from
 #      k8s/ and the policies from k8s/runtime-security/ in namespace "chaos".
-#      A canary pod in each namespace must listen on :8080 and :9090
-#      without being killed (retried while Tetragon settles) before the
-#      Deployment is restarted under the policies.
 #   2. Load: k6 (chaos/k6-load.js) runs as a Job next to the service and
 #      sends RATE requests/s through the Service for DURATION. Any non-200,
 #      5xx or transport error fails the run.
@@ -111,77 +108,6 @@ for _ in $(seq 1 90); do
   sleep 2
 done
 [ "$ready" -eq $((${#POLICIES[@]} * 2)) ] || { echo "$list"; fail "tracing policies not enabled"; exit 1; }
-
-# Pods running e2e/tetragon-harness as /server with the service's
-# labels, so the policies select them.
-harness_pod() { # harness_pod <namespace> <name> <harness args...>: a pod the policies select
-  local ns=$1 name=$2 args
-  shift 2
-  args=$(printf '"%s",' "$@")
-  kubectl -n "$ns" apply -f - >/dev/null <<EOF
-apiVersion: v1
-kind: Pod
-metadata:
-  name: ${name}
-  labels:
-    app: go-k8s-secure-service
-spec:
-  restartPolicy: Never
-  automountServiceAccountToken: false
-  securityContext:
-    runAsNonRoot: true
-    runAsUser: 65532
-    runAsGroup: 65532
-    seccompProfile:
-      type: RuntimeDefault
-  containers:
-    - name: server
-      image: ${HARNESS_IMAGE}
-      imagePullPolicy: Never
-      args: [${args%,}]
-      securityContext:
-        allowPrivilegeEscalation: false
-        readOnlyRootFilesystem: true
-        capabilities:
-          drop: [ALL]
-      resources:
-        limits:
-          cpu: 100m
-          memory: 32Mi
-EOF
-}
-
-# For a short time after a namespaced policy shows as "enabled", Tetragon can
-# kill a listen on an allowed port (seen in CI: the server killed on its first
-# listen on :8080, ~0.7 s after the policies were enabled). Before the
-# Deployment is restarted, a canary in each namespace listens on :8080 and
-# :9090 and is retried until it survives. This happens before
-# policies-before.txt is taken, so killed canaries don't count in the verdict.
-for ns in "$NS" "$ATTACK_NS"; do
-  settled=""
-  for attempt in $(seq 1 10); do
-    # In $NS the canary briefly joins the Service's endpoints; k6 is not
-    # running yet.
-    harness_pod "$ns" policy-canary listen 9090
-    got=""
-    for _ in $(seq 1 90); do
-      code=$(kubectl -n "$ns" get pod policy-canary \
-        -o jsonpath='{.status.containerStatuses[0].state.terminated.exitCode}' 2>/dev/null || true)
-      if [ -n "$code" ]; then got="exit:$code"; break; fi
-      if kubectl -n "$ns" logs policy-canary 2>/dev/null | grep -qx survived; then got=survived; break; fi
-      sleep 1
-    done
-    kubectl -n "$ns" delete pod policy-canary --wait=true >/dev/null
-    case "$got" in
-      survived) settled=$attempt; break ;;
-      exit:137) log "policy canary in $ns killed on attempt $attempt, retrying"; sleep 3 ;;
-      *) fail "policy canary in $ns: ${got:-timeout}"; exit 1 ;;
-    esac
-  done
-  [ -n "$settled" ] || { fail "policies in $ns still kill a listen on an allowed port"; exit 1; }
-  log "policies settled in $ns (canary listened on :8080 and :9090, attempt $settled)"
-done
-
 # Start from fresh pods (restart counters at 0) under the policies.
 kubectl -n "$NS" rollout restart deployment/go-k8s-secure-service >/dev/null
 kubectl -n "$NS" rollout status deployment/go-k8s-secure-service --timeout=120s >/dev/null
@@ -277,8 +203,43 @@ done
 
 # --- 6. RCE simulation: post-exploitation actions inside a pod --------------
 api_ip=$(kubectl -n default get svc kubernetes -o jsonpath='{.spec.clusterIP}')
+attack() { # attack <name> <harness args...>
+  local name=$1 args
+  shift
+  args=$(printf '"%s",' "$@")
+  kubectl -n "$ATTACK_NS" apply -f - >/dev/null <<EOF
+apiVersion: v1
+kind: Pod
+metadata:
+  name: ${name}
+  labels:
+    app: go-k8s-secure-service
+spec:
+  restartPolicy: Never
+  automountServiceAccountToken: false
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 65532
+    runAsGroup: 65532
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: server
+      image: ${HARNESS_IMAGE}
+      imagePullPolicy: Never
+      args: [${args%,}]
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop: [ALL]
+      resources:
+        limits:
+          cpu: 100m
+          memory: 32Mi
+EOF
+}
 log "attack: RCE simulation in $ATTACK_NS (reverse shell, bind shell, dropped binary, ptrace)"
-attack() { harness_pod "$ATTACK_NS" "$@"; }
 attack reverse-shell connect "${api_ip}:443"
 attack bind-shell listen 4444
 attack dropped-binary exec /other

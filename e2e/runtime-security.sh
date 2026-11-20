@@ -3,8 +3,6 @@
 # k8s/runtime-security/ kill forbidden behaviour in the server container and
 # leave the real service alone.
 #
-#  0. The policies are applied, and a canary pod in each namespace must be
-#     able to listen on the allowed ports (retried while Tetragon settles).
 #  1. The policies are applied in the e2e namespace and the Deployment is
 #     restarted under them: the pods must become Ready and stay up.
 #  2. A harness binary (e2e/tetragon-harness) runs as /server in pods that
@@ -28,6 +26,13 @@ cd "$(dirname "$0")/.."
 
 workdir=$(mktemp -d)
 events_pids=()
+print_kprobes() { # one row per kprobe event: time, pod, binary, hook, policy, action, args
+  jq -rR 'fromjson? | select(.process_kprobe) | .time as $t | .process_kprobe |
+    [$t, "\(.process.pod.namespace // "-")/\(.process.pod.name // "-")",
+     .process.binary, .function_name, .policy_name, (.action // "-"),
+     (.args | tojson)] | @tsv' "$workdir/kprobes.json" 2>/dev/null ||
+    cat "$workdir/kprobes.json"
+}
 dump_state() {
   echo "--- runtime-security test failed, cluster state ---"
   kubectl -n "$TEST_NS" get pods -o wide || true
@@ -44,11 +49,7 @@ dump_state() {
   # Tetragon read, e.g. the local port of a socket that was killed on listen.
   if [ -s "$workdir/kprobes.json" ]; then
     echo "--- Tetragon kprobe events with arguments ---"
-    jq -rR 'fromjson? | select(.process_kprobe) | .time as $t | .process_kprobe |
-      [$t, "\(.process.pod.namespace // "-")/\(.process.pod.name // "-")",
-       .process.binary, .function_name, .policy_name, (.action // "-"),
-       (.args | tojson)] | @tsv' "$workdir/kprobes.json" 2>/dev/null ||
-      cat "$workdir/kprobes.json"
+    print_kprobes
   fi
   kubectl -n kube-system logs ds/tetragon -c tetragon --tail=50 || true
 }
@@ -115,15 +116,31 @@ kubectl -n kube-system exec ds/tetragon -c tetragon -- tetra getevents -o compac
   --timestamps --color never -e PROCESS_KPROBE -e PROCESS_EXIT >"$workdir/events.log" 2>&1 &
 events_pids+=($!)
 kubectl -n kube-system exec ds/tetragon -c tetragon -- tetra getevents -o json \
-  -e PROCESS_KPROBE >"$workdir/kprobes.json" 2>&1 &
+  -e PROCESS_KPROBE >"$workdir/kprobes.json" 2>/dev/null &
 events_pids+=($!)
 
-# --- Harness pods: the test binary as /server in a pod the policies select. ---
-run_harness() { # run_harness <namespace> <name> <args...>: starts a selected pod
-  local ns=$1 name=$2 args
-  shift 2
+# --- 1. The real service keeps working under the policies. ---
+kubectl -n "$APP_NS" rollout restart deployment/go-k8s-secure-service
+kubectl -n "$APP_NS" rollout status deployment/go-k8s-secure-service --timeout=120s
+# Let the probes run a few times under enforcement.
+sleep 20
+restarts=$(kubectl -n "$APP_NS" get pods -l app=go-k8s-secure-service \
+  -o jsonpath='{range .items[*]}{.status.containerStatuses[0].restartCount}{"\n"}{end}' | sort -u)
+not_ready=$(kubectl -n "$APP_NS" get pods -l app=go-k8s-secure-service \
+  -o jsonpath='{range .items[*]}{.status.containerStatuses[0].ready}{"\n"}{end}' | grep -vx true || true)
+if [ "$restarts" != "0" ] || [ -n "$not_ready" ]; then
+  echo "FAIL service pods restarted or are not ready under the policies" >&2
+  kubectl -n "$APP_NS" get pods -o wide >&2
+  exit 1
+fi
+echo "ok   service runs under the policies (Ready, no restarts)"
+
+# --- 2. Harness pods. ---
+run_harness() { # run_harness <name> <args...>: starts a selected pod
+  local name=$1 args
+  shift
   args=$(printf '"%s",' "$@")
-  kubectl -n "$ns" apply -f - >/dev/null <<EOF
+  kubectl -n "$TEST_NS" apply -f - >/dev/null <<EOF
 apiVersion: v1
 kind: Pod
 metadata:
@@ -162,79 +179,21 @@ spec:
 EOF
 }
 
-outcome() { # outcome <namespace> <name>: prints "survived", "exit:<code>" or "timeout"
-  local ns=$1 name=$2 code
+outcome() { # outcome <name>: prints "survived" or "exit:<code>"
+  local name=$1 code
   for _ in $(seq 1 90); do
-    code=$(kubectl -n "$ns" get pod "$name" \
+    code=$(kubectl -n "$TEST_NS" get pod "$name" \
       -o jsonpath='{.status.containerStatuses[0].state.terminated.exitCode}' 2>/dev/null || true)
     if [ -n "$code" ]; then echo "exit:$code"; return; fi
-    if kubectl -n "$ns" logs "$name" 2>/dev/null | grep -qx survived; then echo survived; return; fi
+    if kubectl -n "$TEST_NS" logs "$name" 2>/dev/null | grep -qx survived; then echo survived; return; fi
     sleep 1
   done
   echo timeout
 }
 
-# --- 0. Wait until the policies have settled. ---
-# For a short time after a namespaced policy shows as "enabled", Tetragon can
-# kill a listen on an allowed port. In CI the real server was SIGKILLed on its
-# first listen about 0.7s after the policies were enabled, and the restarted
-# container ran fine. Production pods that start right after a policy is
-# applied can hit this too (they recover with one restart).
-# A canary listens on both allowed ports (:8080, then :9090) in each
-# namespace and is retried until it survives, so the checks below test the
-# policies in their settled state. Killed canaries are counted by Tetragon,
-# so step 4 compares its counters with the values taken after this step.
-wait_policies_settled() { # wait_policies_settled <namespace>
-  local ns=$1 attempt got
-  for attempt in $(seq 1 10); do
-    # In $APP_NS the canary briefly joins the Service's endpoints; nothing
-    # sends traffic to the Service at this point.
-    run_harness "$ns" policy-canary listen 9090
-    got=$(outcome "$ns" policy-canary)
-    kubectl -n "$ns" delete pod policy-canary --wait=true >/dev/null
-    case "$got" in
-      survived)
-        echo "ok   policies settled in $ns (canary listened on :8080 and :9090, attempt $attempt)"
-        return
-        ;;
-      exit:137)
-        echo "note policy canary in $ns was killed on attempt $attempt, retrying" >&2
-        sleep 3
-        ;;
-      *)
-        echo "FAIL policy canary in $ns: $got" >&2
-        exit 1
-        ;;
-    esac
-  done
-  echo "FAIL policies in $ns still kill a listen on an allowed port after 10 attempts" >&2
-  exit 1
-}
-for ns in "$APP_NS" "$TEST_NS"; do
-  wait_policies_settled "$ns"
-done
-settled_list=$(tetra tracingpolicy list)
-
-# --- 1. The real service keeps working under the policies. ---
-kubectl -n "$APP_NS" rollout restart deployment/go-k8s-secure-service
-kubectl -n "$APP_NS" rollout status deployment/go-k8s-secure-service --timeout=120s
-# Let the probes run a few times under enforcement.
-sleep 20
-restarts=$(kubectl -n "$APP_NS" get pods -l app=go-k8s-secure-service \
-  -o jsonpath='{range .items[*]}{.status.containerStatuses[0].restartCount}{"\n"}{end}' | sort -u)
-not_ready=$(kubectl -n "$APP_NS" get pods -l app=go-k8s-secure-service \
-  -o jsonpath='{range .items[*]}{.status.containerStatuses[0].ready}{"\n"}{end}' | grep -vx true || true)
-if [ "$restarts" != "0" ] || [ -n "$not_ready" ]; then
-  echo "FAIL service pods restarted or are not ready under the policies" >&2
-  kubectl -n "$APP_NS" get pods -o wide >&2
-  exit 1
-fi
-echo "ok   service runs under the policies (Ready, no restarts)"
-
-# --- 2. Harness pods, one forbidden or allowed action each. ---
 expect() { # expect <name> killed|survived <description>
   local name=$1 want=$2 desc=$3 got
-  got=$(outcome "$TEST_NS" "$name")
+  got=$(outcome "$name")
   case "$want:$got" in
     killed:exit:137 | survived:survived) echo "ok   $desc: $want" ;;
     *)
@@ -247,12 +206,12 @@ expect() { # expect <name> killed|survived <description>
 
 api_ip=$(kubectl -n default get svc kubernetes -o jsonpath='{.spec.clusterIP}')
 
-run_harness "$TEST_NS" idle idle
-run_harness "$TEST_NS" exec-other exec /other
-run_harness "$TEST_NS" listen-other listen 7777
-run_harness "$TEST_NS" connect-api connect "${api_ip}:443"
-run_harness "$TEST_NS" connect-otlp connect 127.0.0.1:4318
-run_harness "$TEST_NS" ptrace ptrace
+run_harness idle idle
+run_harness exec-other exec /other
+run_harness listen-other listen 7777
+run_harness connect-api connect "${api_ip}:443"
+run_harness connect-otlp connect 127.0.0.1:4318
+run_harness ptrace ptrace
 
 expect idle survived "baseline (listen :8080, no action)"
 expect exec-other killed "execve of /other"
@@ -267,7 +226,7 @@ if out=$(kubectl -n "$TEST_NS" exec idle -c server -- /other idle 2>&1); then
   exit 1
 fi
 echo "ok   kubectl exec blocked: $(tail -n1 <<<"$out")"
-if [ "$(outcome "$TEST_NS" idle)" != survived ] ||
+if [ "$(outcome idle)" != survived ] ||
   [ "$(kubectl -n "$TEST_NS" get pod idle -o jsonpath='{.status.containerStatuses[0].restartCount}')" != 0 ]; then
   echo "FAIL the blocked exec affected the running server" >&2
   exit 1
@@ -279,25 +238,22 @@ echo "ok   server process unaffected by the blocked exec"
 # SENSORS KERNELMEMORY MODE NPOST NENFORCE NMONITOR. KERNELMEMORY contains a
 # space ("1.94 MB"), so the counters are read from the end of the row.
 # Every policy must have enforced in the test namespace, and none may have
-# fired for the real service. Both are counted from the values taken after
-# step 0, so killed policy canaries do not count.
+# fired for the real service.
 list=$(tetra tracingpolicy list)
 echo "$list"
-counter() { # counter <list> <policy> <namespace> NPOST|NENFORCE
-  awk -v p="$2" -v ns="$3" -v col="$4" '
-    NR > 1 && $2 == p && $6 == ns { print (col == "NPOST" ? $(NF-2) : $(NF-1)) }' <<<"$1"
+counter() { # counter <policy> <namespace> NPOST|NENFORCE
+  awk -v p="$1" -v ns="$2" -v col="$3" '
+    NR > 1 && $2 == p && $6 == ns { print (col == "NPOST" ? $(NF-2) : $(NF-1)) }' <<<"$list"
 }
 for p in "${POLICIES[@]}"; do
-  enforced=$(counter "$list" "$p" "$TEST_NS" NENFORCE)
-  enforced_before=$(counter "$settled_list" "$p" "$TEST_NS" NENFORCE)
-  if [ -z "$enforced" ] || [ "$((enforced - ${enforced_before:-0}))" -lt 1 ]; then
+  enforced=$(counter "$p" "$TEST_NS" NENFORCE)
+  if [ -z "$enforced" ] || [ "$enforced" -lt 1 ]; then
     echo "FAIL Tetragon counted no enforcement for $p in $TEST_NS" >&2
     exit 1
   fi
-  posted=$(counter "$list" "$p" "$APP_NS" NPOST)
-  posted_before=$(counter "$settled_list" "$p" "$APP_NS" NPOST)
-  if [ -z "$posted" ] || [ "$((posted - ${posted_before:-0}))" -ne 0 ]; then
-    echo "FAIL $p fired $((${posted:-0} - ${posted_before:-0})) time(s) for the real service in $APP_NS" >&2
+  posted=$(counter "$p" "$APP_NS" NPOST)
+  if [ "$posted" != 0 ]; then
+    echo "FAIL $p fired $posted time(s) for the real service in $APP_NS" >&2
     exit 1
   fi
 done
