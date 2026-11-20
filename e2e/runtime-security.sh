@@ -25,16 +25,30 @@ POLICIES=(go-k8s-secure-service-exec go-k8s-secure-service-syscalls go-k8s-secur
 cd "$(dirname "$0")/.."
 
 workdir=$(mktemp -d)
-cleanup() { rm -rf "$workdir"; }
-trap cleanup EXIT
+events_pid=""
 dump_state() {
   echo "--- runtime-security test failed, cluster state ---"
   kubectl -n "$TEST_NS" get pods -o wide || true
   kubectl -n "$APP_NS" get pods -o wide || true
+  # How each container ended: a SIGKILL from Tetragon and the kernel's OOM
+  # killer both give exit code 137; the reason tells them apart.
+  kubectl -n "$TEST_NS" get pods -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.status.containerStatuses[0].state}{"\n"}{end}' || true
   kubectl -n kube-system exec ds/tetragon -c tetragon -- tetra tracingpolicy list || true
+  if [ -s "$workdir/events.log" ]; then
+    echo "--- Tetragon events (kprobes and exits) ---"
+    cat "$workdir/events.log"
+  fi
   kubectl -n kube-system logs ds/tetragon -c tetragon --tail=50 || true
 }
-trap 'dump_state' ERR
+# On EXIT, not ERR: the checks below fail with an explicit `exit 1`, which
+# does not trigger an ERR trap.
+on_exit() {
+  local rc=$?
+  [ -n "$events_pid" ] && kill "$events_pid" 2>/dev/null || true
+  [ "$rc" -ne 0 ] && dump_state
+  rm -rf "$workdir"
+}
+trap on_exit EXIT
 
 tetra() { kubectl -n kube-system exec ds/tetragon -c tetragon -- tetra "$@"; }
 
@@ -81,6 +95,13 @@ if [ "$ready" -ne $((${#POLICIES[@]} * 2)) ]; then
   exit 1
 fi
 echo "ok   ${#POLICIES[@]} tracing policies enabled in $APP_NS and $TEST_NS"
+
+# Record every policy match and process exit for the failure report. Not
+# filtered by namespace: a process killed before Tetragon knows its pod
+# (runc's init) carries no namespace.
+kubectl -n kube-system exec ds/tetragon -c tetragon -- tetra getevents -o compact \
+  --timestamps --color never -e PROCESS_KPROBE -e PROCESS_EXIT >"$workdir/events.log" 2>&1 &
+events_pid=$!
 
 # --- 1. The real service keeps working under the policies. ---
 kubectl -n "$APP_NS" rollout restart deployment/go-k8s-secure-service
