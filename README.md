@@ -577,7 +577,7 @@ The manifests live in [`k8s/`](k8s/):
   (`*.sigstore.json`) for each of them (`cosign verify-blob --bundle`).
 - **Verify a signature manually**:
   ```bash
-  cosign verify ghcr.io/cooler-sai/go-k8s-secure-service:v1.0.11 \
+  cosign verify ghcr.io/cooler-sai/go-k8s-secure-service:v1.0.13 \
     --certificate-oidc-issuer https://token.actions.githubusercontent.com \
     --certificate-identity-regexp '^https://github\.com/cooler-SAI/go-k8s-secure-service/\.github/workflows/release\.yml@refs/tags/v.*$'
   ```
@@ -640,7 +640,7 @@ the signed image from GHCR, point the Deployment at a release tag:
 ```bash
 kubectl apply -f k8s/
 kubectl set image deployment/go-k8s-secure-service \
-  server=ghcr.io/cooler-sai/go-k8s-secure-service:v1.0.11
+  server=ghcr.io/cooler-sai/go-k8s-secure-service:v1.0.13
 kubectl rollout status deployment/go-k8s-secure-service
 ```
 
@@ -921,8 +921,8 @@ GitHub Release itself, so don't create it by hand:
 
 ```bash
 git switch main && git pull --ff-only
-git tag -a v1.0.12 -m "v1.0.12"
-git push origin v1.0.12
+git tag -a v1.0.14 -m "v1.0.14"
+git push origin v1.0.14
 ```
 
 Published releases are listed on the
