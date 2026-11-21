@@ -25,7 +25,14 @@ POLICIES=(go-k8s-secure-service-exec go-k8s-secure-service-syscalls go-k8s-secur
 cd "$(dirname "$0")/.."
 
 workdir=$(mktemp -d)
-events_pid=""
+events_pids=()
+print_kprobes() { # one row per kprobe event: time, pod, binary, hook, policy, action, args
+  jq -rR 'fromjson? | select(.process_kprobe) | .time as $t | .process_kprobe |
+    [$t, "\(.process.pod.namespace // "-")/\(.process.pod.name // "-")",
+     .process.binary, .function_name, .policy_name, (.action // "-"),
+     (.args | tojson)] | @tsv' "$workdir/kprobes.json" 2>/dev/null ||
+    cat "$workdir/kprobes.json"
+}
 dump_state() {
   echo "--- runtime-security test failed, cluster state ---"
   kubectl -n "$TEST_NS" get pods -o wide || true
@@ -38,13 +45,19 @@ dump_state() {
     echo "--- Tetragon events (kprobes and exits) ---"
     cat "$workdir/events.log"
   fi
+  # The compact format hides the kprobe arguments; the JSON copy shows what
+  # Tetragon read, e.g. the local port of a socket that was killed on listen.
+  if [ -s "$workdir/kprobes.json" ]; then
+    echo "--- Tetragon kprobe events with arguments ---"
+    print_kprobes
+  fi
   kubectl -n kube-system logs ds/tetragon -c tetragon --tail=50 || true
 }
 # On EXIT, not ERR: the checks below fail with an explicit `exit 1`, which
 # does not trigger an ERR trap.
 on_exit() {
   local rc=$?
-  [ -n "$events_pid" ] && kill "$events_pid" 2>/dev/null || true
+  [ "${#events_pids[@]}" -gt 0 ] && kill "${events_pids[@]}" 2>/dev/null || true
   [ "$rc" -ne 0 ] && dump_state
   rm -rf "$workdir"
 }
@@ -101,7 +114,10 @@ echo "ok   ${#POLICIES[@]} tracing policies enabled in $APP_NS and $TEST_NS"
 # (runc's init) carries no namespace.
 kubectl -n kube-system exec ds/tetragon -c tetragon -- tetra getevents -o compact \
   --timestamps --color never -e PROCESS_KPROBE -e PROCESS_EXIT >"$workdir/events.log" 2>&1 &
-events_pid=$!
+events_pids+=($!)
+kubectl -n kube-system exec ds/tetragon -c tetragon -- tetra getevents -o json \
+  -e PROCESS_KPROBE >"$workdir/kprobes.json" 2>/dev/null &
+events_pids+=($!)
 
 # --- 1. The real service keeps working under the policies. ---
 kubectl -n "$APP_NS" rollout restart deployment/go-k8s-secure-service
@@ -192,14 +208,17 @@ api_ip=$(kubectl -n default get svc kubernetes -o jsonpath='{.spec.clusterIP}')
 
 run_harness idle idle
 run_harness exec-other exec /other
-run_harness listen-other listen 7777
+# There is no listen rule (see k8s/runtime-security/network.yaml). This pod
+# listens on :9090 10 s after start, when Tetragon really checks the
+# container, and guards against a listen rule that kills allowed ports.
+run_harness listen-allowed listen 9090
 run_harness connect-api connect "${api_ip}:443"
 run_harness connect-otlp connect 127.0.0.1:4318
 run_harness ptrace ptrace
 
 expect idle survived "baseline (listen :8080, no action)"
 expect exec-other killed "execve of /other"
-expect listen-other killed "listen on :7777"
+expect listen-allowed survived "listen on :9090 (allowed port)"
 expect connect-api killed "outbound TCP to ${api_ip}:443"
 expect connect-otlp survived "outbound TCP to :4318 (OTLP)"
 expect ptrace killed "ptrace system call"
