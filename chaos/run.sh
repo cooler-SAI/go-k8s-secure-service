@@ -17,7 +17,7 @@
 #   6. Attack from inside a pod (RCE simulation): the distroless service has
 #      no shell to abuse, so pods running e2e/tetragon-harness as /server,
 #      with the service's labels and policies, perform what an attacker with
-#      code execution would do next: reverse shell, bind shell, a dropped
+#      code execution would do next: reverse shell, a dropped
 #      binary, ptrace. Each must end with SIGKILL (exit code 137).
 #   7. Verdict: k6 thresholds, 5xx seen by the pods, restarts, and
 #      Tetragon's kills per policy and namespace, written to $RESULTS_DIR.
@@ -239,12 +239,11 @@ spec:
           memory: 32Mi
 EOF
 }
-log "attack: RCE simulation in $ATTACK_NS (reverse shell, bind shell, dropped binary, ptrace)"
+log "attack: RCE simulation in $ATTACK_NS (reverse shell, dropped binary, ptrace)"
 attack reverse-shell connect "${api_ip}:443"
-attack bind-shell listen 4444
 attack dropped-binary exec /other
 attack ptrace ptrace
-for name in reverse-shell bind-shell dropped-binary ptrace; do
+for name in reverse-shell dropped-binary ptrace; do
   code=""
   for _ in $(seq 1 90); do
     code=$(kubectl -n "$ATTACK_NS" get pod "$name" \
@@ -341,7 +340,7 @@ done
 {
   echo "# Chaos test $(date -u +%FT%TZ)"
   echo
-  echo "Load: $RATE req/s for $DURATION, $ROLLOUTS rollout(s), kubectl exec into each pod, 4 RCE actions."
+  echo "Load: $RATE req/s for $DURATION, $ROLLOUTS rollout(s), kubectl exec into each pod, 3 RCE actions."
   echo
   echo '## k6'
   echo '```'

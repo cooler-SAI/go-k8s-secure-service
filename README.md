@@ -25,7 +25,7 @@ A lightweight, secure Go HTTP service designed for containerized deployment and 
 | **Observability** | **RED Metrics + OpenTelemetry Tracing** | Request rate, errors and duration at `/metrics` on a separate internal port (`:9090`) that is not part of the Service or Ingress. Distributed tracing with W3C Trace Context (`traceparent`) propagation on incoming and outgoing requests, OTLP/HTTP export, and `trace_id`/`span_id` in request logs. |
 | **Container Hardening** | **Distroless Non-Root (`65532:65532`)** | Multi-stage build (`golang:1.27.3-alpine` builder) deploying to `gcr.io/distroless/static-debian13:nonroot` with read-only rootfs and dropped Linux capabilities. |
 | **Kubernetes Compliance** | **Production Baseline Manifests** | Hardened `Deployment` (probes, non-root `SecurityContext`, `GOMEMLIMIT`), `ClusterIP Service`, `PodDisruptionBudget`, least-privilege `NetworkPolicy` (default deny egress, restricted ingress for traffic and metrics), and CEL-based Kyverno `ValidatingPolicy`/`ImageValidatingPolicy` rules (non-root, non-privileged, probes, resource limits, image signature). |
-| **Runtime Security** | **Cilium Tetragon (eBPF) enforcement** | Three `TracingPolicyNamespaced` policies kill the server process on any `execve` other than `/server`, on 28 escape / privilege-escalation system calls, on listening outside `8080`/`9090`, and on outbound TCP other than OTLP (`4318`). Verified in CI on a kind cluster with Tetragon 1.8.0. |
+| **Runtime Security** | **Cilium Tetragon (eBPF) enforcement** | Three `TracingPolicyNamespaced` policies kill the server process on any `execve` other than `/server`, on 28 escape / privilege-escalation system calls, and on outbound TCP other than OTLP (`4318`). Verified in CI on a kind cluster with Tetragon 1.8.0. |
 | **Chaos Test (kind)** | **PASS: 0 failed of 30,001 requests** | 200 req/s through the Service while the Deployment is rolled twice, `kubectl exec` is tried on each serving pod, and four post-exploitation actions run in a pod under the same policies: 0 failed requests, 0 5xx, p99 1.58 ms, 0 restarts, every attack ended by Tetragon's `SIGKILL`. See [Chaos Test](#chaos-test-kind). |
 | **CI/CD Automation** | **Active (GitHub Actions)** | Continuous integration enforcing formatting (`gofmt`), module verification, code vet (`go vet`), test suite with race detector, router fuzzing, static binary build verification, offline Kyverno policy tests (checksum-verified CLI), a kind E2E smoke test under the `restricted` Pod Security profile with Kyverno enforcing (including live Cosign signature verification), and Trivy security scanning. |
 | **Supply Chain** | **SBOM + Signed Releases** | Trivy-generated SPDX/CycloneDX SBOMs, and tagged releases pushed to GHCR with keyless Cosign signatures and SBOM attestations, verified at admission by Kyverno. |
@@ -115,7 +115,7 @@ go-k8s-secure-service/
 │   ├── runtime-security/  # Cilium Tetragon TracingPolicies (applied separately)
 │   │   ├── exec-allowlist.yaml # Only /server may be executed
 │   │   ├── syscalls.yaml       # Escape / privilege-escalation system calls are killed
-│   │   └── network.yaml        # Listen only on 8080/9090, outbound TCP only to 4318
+│   │   └── network.yaml        # Outbound TCP only to 4318
 │   └── policies/          # CEL-based Kyverno policies (applied separately)
 │       ├── disallow-root-user.yaml             # ValidatingPolicy: no runAsUser 0
 │       ├── disallow-privileged-containers.yaml # ValidatingPolicy: no privileged containers
@@ -674,7 +674,7 @@ connections except optional trace export.
 | :--- | :--- | :--- | :--- |
 | [`exec-allowlist.yaml`](k8s/runtime-security/exec-allowlist.yaml) | `security_bprm_check` (every `execve`) | executing `/server` | executing anything else, e.g. a dropped binary or a `memfd_create` payload |
 | [`syscalls.yaml`](k8s/runtime-security/syscalls.yaml) | 28 system calls | — | `ptrace`, `process_vm_readv/writev`; `mount`, `umount2`, `pivot_root`, `chroot`, `unshare`, `setns`, `open_by_handle_at`; kernel module, `kexec` and `bpf` calls; `setuid`/`setgid` family, `setgroups`, `capset`; `keyctl`, `add_key`, `request_key`, `userfaultfd` |
-| [`network.yaml`](k8s/runtime-security/network.yaml) | `inet_csk_listen_start`, `tcp_connect` | listening on `8080`/`9090`; outbound TCP to port `4318` (OTLP/HTTP) | listening on any other port (bind shell); any other outbound TCP connection (reverse shell, exfiltration) |
+| [`network.yaml`](k8s/runtime-security/network.yaml) | `tcp_connect` | outbound TCP to port `4318` (OTLP/HTTP) | any other outbound TCP connection (reverse shell, exfiltration) |
 
 How they are scoped and what they do:
 
@@ -700,6 +700,13 @@ How they are scoped and what they do:
   anything else. `perf_event_open` is left out because some kernels refuse a
   kprobe on it, which would stop the whole policy from loading; seccomp
   blocks it here anyway.
+- There is no rule for listening sockets. Tetragon 1.8.0 evaluates
+  `NotSPort` with more than one value as true for every port, so a rule
+  "listen only on `8080`/`9090`" killed the server on its own ports, and an
+  `SPort` → `NoPost` selector before a catch-all `Sigkill` does not help
+  (both found by the E2E test). A bind shell on another port is still
+  unreachable: [`networkpolicy.yaml`](k8s/networkpolicy.yaml) only admits
+  traffic to `8080` and `9090`.
 - When a rule fires, the server process exits with code `137` and the
   kubelet restarts the container (the Deployment's `restartPolicy` is
   `Always`). That is the intended response: a process that tried to escape
@@ -753,14 +760,17 @@ test binary ([`e2e/tetragon-harness`](e2e/tetragon-harness/main.go)) as
 | :--- | :--- |
 | none (listen on `8080` only) | survives |
 | `execve("/other")` | killed (exit code `137`) |
-| listen on `7777` | killed |
+| listen on `9090`, 10 s after start (no listen rule may kill allowed ports) | survives |
 | TCP connect to the Kubernetes API (`:443`) | killed |
 | TCP connect to `127.0.0.1:4318` | survives |
 | `ptrace(PTRACE_TRACEME)` | killed |
 | `kubectl exec` into the running pod | exec fails, server keeps running |
 
 Finally it checks Tetragon's counters: every policy enforced at least once in
-the test namespace, and none fired for the real service. To run it locally
+the test namespace, and none fired for the real service. If the test fails,
+it prints the cluster state, the Tetragon events, and every kprobe event with
+its arguments (for example the address and port of a blocked connection).
+To run it locally
 after the smoke test (kind cluster created with
 [`e2e/kind-config.yaml`](e2e/kind-config.yaml)):
 
@@ -784,7 +794,7 @@ load while its pods are replaced and attacked.
 | Live RED metrics | [`red-watch.sh`](chaos/red-watch.sh) scrapes `:9090/metrics` of every pod every 2 s through the API server's pod proxy, including `Terminating` pods while they drain | no 5xx counted by any pod |
 | Rollouts | 2 × `kubectl rollout restart` under load | no service container restarts |
 | Attack on the live pods | `kubectl exec <pod> -- /bin/sh` into each serving container | exec fails, server keeps serving |
-| Attack from inside a pod | the [test harness](e2e/tetragon-harness/main.go) runs as `/server` under the same labels and policies (in `chaos-attack`, so it never receives traffic) and does what an attacker with code execution would try next: reverse shell, bind shell, dropped binary, `ptrace` | exit code `137` (`SIGKILL`), and the call never returned to user space |
+| Attack from inside a pod | the [test harness](e2e/tetragon-harness/main.go) runs as `/server` under the same labels and policies (in `chaos-attack`, so it never receives traffic) and does what an attacker with code execution would try next: reverse shell, dropped binary, `ptrace` | exit code `137` (`SIGKILL`), and the call never returned to user space |
 | Tetragon counters | kills per policy and namespace, from `tetra tracingpolicy list` before and after | one kill per attack; no policy fires for the server itself |
 
 ```bash
@@ -803,7 +813,9 @@ to `chaos/results/<timestamp>/`: `timeline.log`, `red.log`, `k6.log`, the raw
 
 Run on 2026-11-20: kind v0.27.0 (Kubernetes v1.32.2), Tetragon 1.8.0,
 Docker Desktop on Windows 11 (WSL2 kernel 5.15.167), single node. Two
-consecutive runs gave the same result.
+consecutive runs gave the same result. This run predates the removal of the
+listen rule from `network.yaml` (see [Runtime Security](#runtime-security-cilium-tetragon)),
+so it still includes a bind-shell attack; the script now runs three attacks.
 
 | Metric | Result |
 | :--- | :--- |
@@ -963,7 +975,7 @@ Published releases are listed on the
 - [x] **Signed Releases**: GitHub Releases ship SBOMs with keyless Sigstore bundles.
 - [x] **Distributed Tracing (OpenTelemetry)**: W3C Trace Context propagation for incoming and outgoing requests, OTLP/HTTP export, Kubernetes resource attributes, and `trace_id`/`span_id` in request logs.
 - [x] **Prometheus Metrics (RED)**: Request rate, errors and duration on a separate internal metrics port (`:9090`), kept off the Service and Ingress and restricted by NetworkPolicy, without adding `client_golang`.
-- [x] **Runtime Security (Cilium Tetragon)**: eBPF `TracingPolicyNamespaced` policies kill the server on unexpected `execve`, escape / privilege-escalation system calls, unexpected listening ports and outbound TCP; verified against a live kernel in CI.
+- [x] **Runtime Security (Cilium Tetragon)**: eBPF `TracingPolicyNamespaced` policies kill the server on unexpected `execve`, escape / privilege-escalation system calls and unexpected outbound TCP; verified against a live kernel in CI.
 - [x] **Chaos Test (kind)**: k6 load during rolling restarts, `kubectl exec` and simulated post-exploitation actions, with live RED metrics and Tetragon kill counters: zero failed requests, every attack killed.
 
 ---

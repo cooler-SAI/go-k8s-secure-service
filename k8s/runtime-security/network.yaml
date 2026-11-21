@@ -1,8 +1,14 @@
 # Runtime enforcement with Cilium Tetragon: the server process may only
-# listen on its two ports and may only open outbound TCP connections to an
-# OpenTelemetry Collector (OTLP/HTTP, port 4318). Anything else kills the
-# process: a bind shell on a new port, or a reverse shell, exfiltration or
-# lateral movement over an outbound connection.
+# open outbound TCP connections to an OpenTelemetry Collector (OTLP/HTTP,
+# port 4318). Any other outbound connection kills the process: a reverse
+# shell, exfiltration or lateral movement.
+#
+# There is no rule for listening sockets. Tetragon 1.8.0 evaluates NotSPort
+# with more than one value as true for every port, so a rule "listen only on
+# 8080 and 9090" killed the server on its own ports (verified in CI), and a
+# SPort -> NoPost selector before a catch-all Sigkill does not help, because
+# the Sigkill selector still applies. A bind shell on another port is still
+# unreachable: k8s/networkpolicy.yaml only admits traffic to 8080 and 9090.
 #
 # This complements k8s/networkpolicy.yaml, which drops the packets at the
 # network level. The NetworkPolicy cannot tell which process opened a
@@ -10,8 +16,8 @@
 # killed process may already have sent the first SYN, so keep the
 # NetworkPolicy as the packet-level control.
 #
-# Keep the ports in sync with PORT / METRICS_PORT (deployment.yaml) and with
-# the OTLP egress rule in networkpolicy.yaml if you change them.
+# Keep the port in sync with the OTLP egress rule in networkpolicy.yaml if
+# you change it.
 #
 # Requires Tetragon (tested with 1.8.0). Apply in the service's namespace:
 #   kubectl apply -f k8s/runtime-security/
@@ -29,23 +35,6 @@ spec:
         operator: In
         values: [server]
   kprobes:
-    # A TCP socket starts listening. The local port is already bound here.
-    - call: inet_csk_listen_start
-      syscall: false
-      message: "Blocked a listening socket on an unexpected port"
-      tags: [runtime-security, network]
-      args:
-        - index: 0
-          type: sock
-      selectors:
-        - matchArgs:
-            - index: 0
-              operator: NotSPort
-              values:
-                - "8080" # PORT: application traffic
-                - "9090" # METRICS_PORT: Prometheus /metrics
-          matchActions:
-            - action: Sigkill
     # An outbound TCP connection is being opened.
     - call: tcp_connect
       syscall: false
